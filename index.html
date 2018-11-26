@@ -29,9 +29,7 @@
     }
 
     /* these are only for individual lines of output */
-    .compare-timing {
-      display: block;
-      width: 100%;
+    .cmp {
     }
     .equal {
       text-align: center;
@@ -45,9 +43,16 @@
       color: brown;
     }
     .blocker {
-      margin-left: 3em;
       font-size: 90%;
-      color: crimson;
+      padding: 0 20%;
+    }
+    .blocker.mod {
+      text-align: left !important;
+      padding: 0 50%;
+    }
+    .blocker::before {
+      content: 'BLOCKER: ';
+      font-weight: bold;
     }
     .clickable {
       cursor: pointer;
