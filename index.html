@@ -1,0 +1,66 @@
+<!DOCUMENT html>
+<head>
+  <title>Backtrack Demo</title>
+  <meta charset="utf-8" />
+  <script src="jquery-3.3.1.slim.min.js"></script>
+  <script src="bt.js"></script>
+  <style>
+    body {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 12px;
+    }
+    .half {
+      width: calc(50% - 8px);
+    }
+    .half.box {
+      display: inline-block;
+    }
+    #timeline {
+      float: left;
+      width: 100%;
+      display: block;
+      box-sizing: border-box;
+    }
+    #info {
+      float: right;
+      width: 25%;
+      display: block;
+      box-sizing: border-box;
+    }
+
+    /* these are only for individual lines of output */
+    .blocker {
+      margin-left: 3em;
+      font-size: 90%;
+      color: crimson;
+    }
+    .clickable {
+      cursor: pointer;
+    }
+    .trail {
+      margin-left: 8em !important;
+      font-weight: bold;
+    }
+    .span {
+      margin-left: 4em;
+      color: gray !important;
+    }
+    .join {
+      color: black;
+    }
+    .join::before {
+      content: "Paths are joining here : ";
+    }
+  </style>
+</head>
+<body>
+  <h2 class="half box">Baseline</h2>
+  <h2 class="half box">Modified</h2>
+  <input class="half" type="file" id="files1" data-bt="0" multiple />
+  <input class="half" type="file" id="files2" data-bt="1" multiple />
+  <br />
+  <br />
+  <select class="half" id="objectives1" data-bt="0"></select>
+  <select class="half" id="objectives2" data-bt="1"></select>
+  <div id="timeline"></div>
+</body>
