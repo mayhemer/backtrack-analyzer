@@ -55,7 +55,7 @@ Array.prototype.last = function () {
 };
 
 // Original LCS code written by Alexis Lagante @alexishacks (github)
-function LCS(s1, s2) {
+function LCS(s1, s2, compare) {
   let result = [];
   for (let i = 0; i <= s1.length; i++) {
     result.push([]);
@@ -63,7 +63,7 @@ function LCS(s1, s2) {
       let currValue = 0;
       if (i == 0 || j == 0) {
         currValue = 0;
-      } else if (s1[i - 1].desc === s2[j - 1].desc) {
+      } else if (compare(s1[i - 1], s2[j - 1])) {
         currValue = result[i - 1][j - 1] + 1;
       } else {
         currValue = Math.max(result[i][j - 1], result[i - 1][j]);
@@ -75,10 +75,9 @@ function LCS(s1, s2) {
   let i = s1.length;
   let j = s2.length;
 
-  let mapping = {};
   while (result[i][j] > 0) {
-    if (s1[i - 1] === s2[j - 1] && (result[i - 1][j - 1] + 1 == result[i][j])) {
-      s1[i - 1].equals = j - 1;
+    if (compare(s1[i - 1], s2[j - 1]) && (result[i - 1][j - 1] + 1 == result[i][j])) {
+      s1[i - 1].equals = s2[j - 1];
       i = i - 1;
       j = j - 1;
     } else if (result[i - 1][j] > result[i][j - 1])
@@ -86,18 +85,60 @@ function LCS(s1, s2) {
     else
       j = j - 1;
   }
-  return mapping;
 }
+
+let display = {
+  gid: function(marker) {
+    return `${marker.tid}:${marker.id}`; // assume tids are unique cross profiles...
+  },
+
+  reset: function () {
+    this.elements = [];
+    $("#timeline").empty();
+  },
+
+  defer: function (bt, marker, msg = "") {
+    let element = this.elements[this.gid(marker)];
+    if (!element) {
+      let thread = bt.threads[marker.tid];
+      let process = thread.process;
+      element = $("<pre>").text(
+        `${MarkerType.$(marker.type)} "${marker.names.join("|")}"\n  ${process.name}/${thread.name}  ${msg}`
+      );
+
+      element = { element, marker };
+      this.elements[this.gid(marker)] = element;
+    }
+
+    return element;
+  },
+
+  flush(single) {
+    let elements = Object.values(this.elements);
+    if (single) {
+      elements.sort((a, b) => {
+        return b.marker.time - a.marker.time;
+      });
+    } else {
+      elements.sort((a, b) => {
+        return b.order - a.order;
+      });
+    }
+
+    let timeline = $("#timeline");
+    for (let element of elements) {
+      timeline.append(element.element);
+    }
+  },
+};
 
 class Backtrack {
   constructor(files, objectives, baseline = null) {
     this.objectivesSelector = objectives;
-    this.files = Array.from(files.get()[0].files);
     this.baseline = baseline;
 
     this.objectivesSelector.on("change", (event) => {
-      $("#timeline").empty();
-      this.elements = {};
+      display.reset();
       this.deferedBlockers = [];
       
       try {
@@ -110,20 +151,19 @@ class Backtrack {
       } catch (ex) {
         throw ex;
       } finally {
-        this.flushDisplay();
+        display.flush(!this.baseline);
       }
     });
 
     files.on("change", (event) => {
-      $("#timeline").empty();
+      this.files = Array.from(event.target.files);
       this.consumeFiles();
     });
 
-    this.consumeFiles();
+    files.trigger("change");
   }
 
   consumeFiles() {
-    this.elements = {};
     this.deferedBlockers = [];
 
     this.objectives = [];
@@ -198,7 +238,9 @@ class Backtrack {
   }
 
   async consume(files) {
+    console.log("consume");
     for (let file of Array.from(files)) {
+      console.log(file.file.name);
       let pid = file.file.name.split(".")[0];
       let process = {
         pid,
@@ -370,16 +412,17 @@ class Backtrack {
   listObjectives() {
     this.objectivesSelector.empty();
     if (!this.objectives.length) {
+      console.log("no objectives found");
       return;
     }
 
     this.objectivesSelector.append($("<option>").attr("value", `0:0`).text("Select objective"));
     for (let obj of this.objectives) {
-      let source = this.backtrack(obj.tid, obj.id, () => { });
+      obj.source = this.backtrack(obj.tid, obj.id, () => { });
       this.objectivesSelector
         .append($("<option>")
           .attr("value", `${obj.tid}:${obj.id}`)
-          .text(`${obj.names.join("|")} @${obj.time}s → ${source.names.join("|")} @${source.time}s`)
+          .text(`${obj.names.join("|")} @${obj.time}s → ${obj.source.names.join("|")} @${obj.source.time}s`)
         );
     }
     this.objectivesSelector.val(`0:0`);
@@ -388,8 +431,8 @@ class Backtrack {
   baselineProfile(tid, id) {
     this.backtrack(
       tid, id,
-      (bt, marker, _class = "") => {
-        bt.display(marker).addClass(_class);
+      (bt, marker, className = "") => {
+        display.defer(bt, marker).element.addClass(className);
       },
       (bt, trail, marker) => {
         bt.deferedBlockers.push({ trail, marker });
@@ -398,29 +441,79 @@ class Backtrack {
   }
 
   compareProfiles(tid, id) {
-    let collector = function (bt, marker) {
-      this.push({ marker, desc: this.descriptor(marker), });
+    let collector = function (bt, marker, className) {
+      this.push({ marker, desc: bt.descriptor(marker), className });
     };
     let trailCollector = function (bt, trail, marker) {
+      bt.assert(this.last().marker === marker);
       this.last().trail = trail;
     };
 
     let baselinePath = [];
-    this.basline.backtrack(tid, id, collector.bind(baselinePath), trailCollector.bind(baselinePath));
+    let [btid, bid] = this.baseline.objectivesSelector.val().split(":").map(id => parseInt(id));
+    this.baseline.backtrack(btid, bid, collector.bind(baselinePath), trailCollector.bind(baselinePath));
 
     let modifiedPath = [];
     this.backtrack(tid, id, collector.bind(modifiedPath), trailCollector.bind(modifiedPath));
 
-    let mapping = LCS(baselinePath, modifiedPath);
-  }
+    // Fills |equals| property on the baselinePath array pointing to the modified path
+    LCS(baselinePath, modifiedPath, (a, b) => a.desc === b.desc);
 
-  flushDisplay() {
-    let timeline = $("#timeline");
-    let elements = Object.values(this.elements).sort((a, b) => {
-      return b.marker.time - a.marker.time;
-    });
-    for (let element of elements) {
-      timeline.append(element.element);
+    let order = 0;
+    while (baselinePath.length || modifiedPath.length) {
+      let base = baselinePath[0];
+      let mod = modifiedPath[0];
+
+      let equal = base && base.equals && base.equals === mod;
+
+      if (equal) {
+        let base_prev;
+        for (base_prev of baselinePath.slice(1)) {
+          if (base_prev.equals) {
+            break;
+          }
+        }
+        let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
+        let mod_prev = (base_prev && base_prev.equals) ? base_prev.equals : modifiedPath[1];
+        let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
+
+        let element = display.defer(this.baseline, base.marker,
+          `\nbase: +${base_delay.toFixed(5)}s, modified: +${mod_delay.toFixed(5)}s, difference: ${(mod_delay - base_delay).toFixed(5)}s`);
+        element.element.addClass("equal").addClass(base.className);
+        element.order = --order;
+
+        baselinePath.shift();
+        modifiedPath.shift();
+        continue;
+      }
+
+      if (base && !base.equals) {
+        let base_prev = baselinePath[1] || null;
+        let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
+
+        let element = display.defer(this.baseline, base.marker,
+          `\nbase: +${base_delay.toFixed(5)}s`);
+        element.element.addClass("base").addClass(base.className);
+        element.order = --order;
+
+        baselinePath.shift();
+        continue;
+      }
+
+      if (!base || (base && base.equals && base.equals != mod)) {
+        let mod_prev = modifiedPath[1] || null;
+        let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
+
+        let element = display.defer(this, mod.marker,
+          `\nmodified: +${mod_delay.toFixed(5)}s`);
+        element.element.addClass("mod").addClass(mod.className);
+        element.order = --order;
+
+        modifiedPath.shift();
+        continue;
+      }
+
+      throw "Impossible!";
     }
   }
 
@@ -430,14 +523,11 @@ class Backtrack {
     }
   }
 
-  gid(marker) {
-    return `${marker.tid}:${marker.id}`;
-  }
-
   descriptor(marker) {
     let thread = this.threads[marker.tid];
     let process = thread.process;
-    return `${marker.type}/${marker.names.join("|")}/${process.type}/${thread.name}`;
+    let threadName = thread.name.split('#')[0];
+    return `${marker.type}@${marker.names.join("|")}@${process.type}@${threadName}`;
   }
 
   get(gid) {
@@ -513,39 +603,23 @@ class Backtrack {
       let execute_begin = this.get(pexec_gid);
       let execute_end = this.forwardtrail(execute_begin);
       if (execute_end.time > dispatch.time && (execute_end.tid !== up_to.tid || execute_end.time < up_to.time)) {
-        this.display(execute_begin)
+        display.defer(this, execute_begin).element
           .addClass("blocker clickable")
           .click(() => {
             let last = null;
-            this.display(execute_end).addClass("blocker trail");
-            this.backtrack(execute_begin.tid, execute_begin.id, (bt, marker, _class = "") => {
-              last = this.display(marker).addClass("blocker trail").addClass(_class);
+            display.defer(this, execute_end).element.addClass("blocker trail");
+            this.backtrack(execute_begin.tid, execute_begin.id, (bt, marker, className = "") => {
+              last = display.defer(this, marker).element.addClass("blocker trail").addClass(className);
             });
             if (last) {
               last.addClass("join");
             }
-            this.flushDisplay();
+            display.flush();
           });
       }
 
       pexec_gid = execute_begin.pexec_gid;
     }
-  }
-
-  display(marker, msg = "") {
-    let element = this.elements[this.gid(marker)];
-    if (!element) {
-      let thread = this.threads[marker.tid];
-      let process = thread.process;
-      element = $("<pre>")
-        .text(`${MarkerType.$(marker.type)} "${marker.names.join("|")}"\n  ${marker.time}s, ${process.name}/${thread.name}${msg ? ` ${msg}` : ``}`);
-
-      this.elements[this.gid(marker)] = { element, marker };
-    } else {
-      element = element.element;
-    }
-
-    return element;
   }
 
   backtrack(tid, id, collector, blocker_trail = () => { }) {
@@ -603,7 +677,7 @@ class Backtrack {
       let { trail, marker } = execute;
       this.displayBlockersOf(trail, marker);
     }
-    this.flushDisplay();
+    display.flush();
   }
 }
 

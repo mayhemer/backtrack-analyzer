@@ -1,6 +1,6 @@
 <!DOCUMENT html>
 <head>
-  <title>Backtrack Demo</title>
+  <title>Backtrack Data Analyzer</title>
   <meta charset="utf-8" />
   <script src="jquery-3.3.1.slim.min.js"></script>
   <script src="bt.js"></script>
@@ -29,6 +29,21 @@
     }
 
     /* these are only for individual lines of output */
+    .compare-timing {
+      display: block;
+      width: 100%;
+    }
+    .equal {
+      text-align: center;
+    }
+    .base {
+      text-align: left;
+      color: green;
+    }
+    .mod {
+      text-align: right;
+      color: brown;
+    }
     .blocker {
       margin-left: 3em;
       font-size: 90%;
