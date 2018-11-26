@@ -80,19 +80,24 @@ function LCS(s1, s2, compare) {
 
   let i = s1.length;
   let j = s2.length;
+  let merge = [];
 
   while (result[i][j] > 0) {
     if (compare(s1[i - 1], s2[j - 1]) && (result[i - 1][j - 1] + 1 == result[i][j])) {
       s1[i - 1].equals = s2[j - 1];
       i = i - 1;
       j = j - 1;
-    } else if (result[i - 1][j] > result[i][j - 1])
+      merge.unshift({ base: s1[i], mod: s2[j] });
+    } else if (result[i - 1][j] > result[i][j - 1]) {
       i = i - 1;
-    else
+      merge.unshift({ base: s1[i], mod: undefined });
+    } else {
       j = j - 1;
+      merge.unshift({ base: undefined, mod: s2[j] });
+    }
   }
 
-  // TODO return a merged array with .base and .mod properties
+  return merge;
 }
 
 let display = {
@@ -452,42 +457,49 @@ class Backtrack {
       this.last().trail = trail;
     };
 
-    let baselinePath = [];
     let [btid, bid] = this.baseline.objectivesSelector.val().split(":").map(id => parseInt(id));
+    let baselinePath = [];
     this.baseline.backtrack(btid, bid, collector.bind(baselinePath), trailCollector.bind(baselinePath));
 
     let modifiedPath = [];
     this.backtrack(tid, id, collector.bind(modifiedPath), trailCollector.bind(modifiedPath));
 
-    // Fills |equals| property on the baselinePath array pointing to the modified path
-    LCS(baselinePath, modifiedPath, (a, b) => a.desc === b.desc);
+    let compare = LCS(baselinePath, modifiedPath, (a, b) => a.desc === b.desc);
 
     let order = 0;
-    while (baselinePath.length || modifiedPath.length) {
-      let base = baselinePath[0];
-      let mod = modifiedPath[0];
+    while (compare.length) {
+      let { base, mod } = compare.shift();
+      let base_prev = compare.find(e => e.base);
+      if (base_prev) {
+        base_prev = base_prev.base;
+      }
+      let mod_prev = compare.find(e => e.mod);
+      if (mod_prev) {
+        mod_prev = mod_prev.mod;
+      }
+      let equal_prev = compare.find(e => e.base && e.mod);
+      if (equal_prev === compare[0]) {
+        // We only want this when there is a diversion ahead
+        equal_prev = null;
+      }
 
-      let equal = base && base.equals && base.equals === mod;
+      if (base && mod) {
+        let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
+        let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
+        let base_delay_eq = 0;
+        let mod_delay_eq = 0;
 
-      if (equal) {
-        let base_prev;
-        for (base_prev of baselinePath.slice(1)) {
-          if (base_prev.equals) {
-            break;
-          }
+        let text = `\nbase: +${base_delay.toFixed(5)}s, modified: +${mod_delay.toFixed(5)}s, difference: ${(mod_delay - base_delay).toFixed(5)}s`;
+        if (equal_prev) {
+          // Calc the times to the next point where path meet each other again.
+          base_delay_eq = base.marker.time - equal_prev.base.marker.time;
+          mod_delay_eq = mod.marker.time - equal_prev.mod.marker.time;
+          text += `\ndifference to the next equal point: ${(mod_delay_eq - base_delay_eq).toFixed(5)}s`;
         }
 
-        let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
-        let mod_prev = (base_prev && base_prev.equals) ? base_prev.equals : modifiedPath[1];
-        let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
-
-        let element = display.defer(this.baseline, base.marker,
-          `\nbase: +${base_delay.toFixed(5)}s, modified: +${mod_delay.toFixed(5)}s, difference: ${(mod_delay - base_delay).toFixed(5)}s`);
+        let element = display.defer(this.baseline, base.marker, text);
         element.element.addClass("equal cmp").addClass(base.className);
         element.order = ++order;
-
-        baselinePath.shift();
-        modifiedPath.shift();
 
         if (base.trail) {
           this.assert(!!mod.trail, "Equal marker from the modified profile doesn't have a trail");
@@ -498,57 +510,39 @@ class Backtrack {
           let modifiedBlockers = [];
           this.blockers(mod.trail, mod.marker, collector.bind(modifiedBlockers));
 
-          LCS(baselineBlockers, modifiedBlockers, (a, b) => a.desc === b.desc);
+          let blockers = LCS(baselineBlockers, modifiedBlockers, (a, b) => a.desc === b.desc);
 
-          let equalBlockers = baselineBlockers.filter(blocker => blocker.equals);
-          for (let blocker of equalBlockers) {
-            baselineBlockers.remove(blocker);
-            modifiedBlockers.remove(blocker.equals);
-          }
-
-          for (let blocker of baselineBlockers) {
-            let element = display.defer(this.baseline, blocker.marker, '', true);
-            element.element.addClass("base blocker");
-            element.order = ++order;
-          }
-
-          for (let blocker of modifiedBlockers) {
-            let element = display.defer(this, blocker.marker, '', true);
-            element.element.addClass("mod blocker");
-            element.order = ++order;
+          for (let blocker of blockers) {
+            if (blocker.base && blocker.mod) {
+              continue;
+            }
+            if (blocker.base) {
+              let element = display.defer(this.baseline, blocker.base.marker, '', true);
+              element.element.addClass("base blocker");
+              element.order = ++order;
+            }
+            if (blocker.mod) {
+              let element = display.defer(this, blocker.mod.marker, '', true);
+              element.element.addClass("mod blocker");
+              element.order = ++order;
+            }
           }
         }
-
-        continue;
-      }
-
-      if (base && !base.equals) {
-        let base_prev = baselinePath[1] || null;
+      } else if (base) {
         let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
 
         let element = display.defer(this.baseline, base.marker,
           `\nbase: +${base_delay.toFixed(5)}s`);
         element.element.addClass("base cmp").addClass(base.className);
         element.order = ++order;
-
-        baselinePath.shift();
-        continue;
-      }
-
-      if (!base || (base && base.equals && base.equals != mod)) {
-        let mod_prev = modifiedPath[1] || null;
+      } else {
         let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
 
         let element = display.defer(this, mod.marker,
           `\nmodified: +${mod_delay.toFixed(5)}s`);
         element.element.addClass("mod cmp").addClass(mod.className);
         element.order = ++order;
-
-        modifiedPath.shift();
-        continue;
       }
-
-      throw "Impossible!";
     }
   }
 
