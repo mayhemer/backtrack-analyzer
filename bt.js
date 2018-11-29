@@ -149,6 +149,7 @@ let display = {
 class Backtrack {
   constructor(files, objectives, baseline = null) {
     this.objectivesSelector = objectives;
+    this.filesSelector = files;
     this.baseline = baseline;
 
     this.objectivesSelector.on("change", (event) => {
@@ -159,6 +160,21 @@ class Backtrack {
           this.compareProfiles(tid, id);
         } else {
           this.baselineProfile(tid, id);
+          if (tid === 0 && id === 0) {
+            this.modified.filesSelector.prop("disabled", true);
+            return;
+          }
+          // And now, when the basline profile's objective is selected,
+          // we allow loading the modified profile.
+          this.modified.filesSelector.prop("disabled", false);
+          if (!this.modified.objectives.length) {
+            this.modified.objectivesSelector.empty().append($("<option>")
+              .attr("value", `0:0`)
+              .text(`Optionally load files for the modified profile to compare to`)
+            ).val("0:0");
+          } else {
+            this.modified.objectivesSelector.prop("disabled", false);
+          }
         }
       } catch (ex) {
         throw ex;
@@ -179,6 +195,15 @@ class Backtrack {
     this.objectives = [];
     this.processes = {};
     this.threads = {};
+
+    if (this.files.length == 0) {
+      return;
+    }
+
+    this.objectivesSelector.empty().append($("<option>")
+      .attr("value", `0:0`)
+      .text(`Loading...`)
+    ).val(`0:0`);
 
     let files = [];
     for (let file of this.files) {
@@ -248,9 +273,7 @@ class Backtrack {
   }
 
   async consume(files) {
-    console.log("consume");
     for (let file of Array.from(files)) {
-      console.log(file.file.name);
       let pid = file.file.name.split(".")[0];
       let process = {
         pid,
@@ -422,8 +445,12 @@ class Backtrack {
   listObjectives() {
     this.objectivesSelector.empty();
     if (!this.objectives.length) {
-      console.log("no objectives found");
+      this.objectivesSelector.append($("<option>").attr("value", `0:0`).text("No objective found")).val(`0:0`);
       return;
+    }
+
+    if (!this.baseline || this.baseline.objectivesSelector.val() != "0:0") {
+      this.objectivesSelector.prop("disabled", false);
     }
 
     this.objectivesSelector.append($("<option>").attr("value", `0:0`).text("Select objective"));
@@ -691,12 +718,16 @@ class Backtrack {
   }
 }
 
-let sets = {
-  baseline: null,
-  modified: null,
-};
-
 $(() => {
-  sets.baseline = new Backtrack($("#files1"), $("#objectives1"));
-  sets.modified = new Backtrack($("#files2"), $("#objectives2"), sets.baseline);
+  $("#objectives1").append($("<option>")
+    .attr("value", `0:0`)
+    .text(`Please load files for the baseline profile`)
+  ).val(`0:0`).prop("disabled", true);
+
+  $("#files2").prop("disabled", true);
+  $("#objectives2").prop("disabled", true);
+
+  let baseline = new Backtrack($("#files1"), $("#objectives1"));
+  let modified = new Backtrack($("#files2"), $("#objectives2"), baseline);
+  baseline.modified = modified;
 });
