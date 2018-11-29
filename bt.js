@@ -97,6 +97,15 @@ function LCS(s1, s2, compare) {
     }
   }
 
+  while (j) {
+    j = j - 1;
+    merge.unshift({ base: undefined, mod: s2[j] });
+  }
+  while (i) {
+    i = i - 1;
+    merge.unshift({ base: s1[i], mod: undefined });
+  }
+
   return merge;
 }
 
