@@ -571,13 +571,15 @@ class Backtrack {
           `\nbase: +${base_delay.toFixed(5)}s`);
         element.element.addClass("base cmp").addClass(base.className);
         element.order = ++order;
-      } else {
+      } else if (mod) {
         let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
 
         let element = display.defer(this, mod.marker,
           `\nmodified: +${mod_delay.toFixed(5)}s`);
         element.element.addClass("mod cmp").addClass(mod.className);
         element.order = ++order;
+      } else {
+        this.assert(false, "No .baseline or .modified on an LCS result");
       }
     }
   }
