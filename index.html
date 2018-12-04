@@ -59,18 +59,30 @@
       text-align: right;
       color: brown;
     }
+    div.blocker-container {
+      background-color: rgb(250, 247, 239);
+      padding: 1em 2em;
+      margin: 1em 15%;
+      border: 1px solid gray;
+    }
     .blocker {
       font-size: 90%;
     }
+    .blocker.equal {
+      text-align: center;
+      color:rgb(95, 95, 95);
+    }
+    /*
     .blocker.base {
       padding: 0 25%;
-      color: dodgerblue;
+      color: dodgerblue !important;
     }
     .blocker.mod {
       text-align: left !important;
       padding: 0 50%;
-      color: goldenrod;
+      color: goldenrod !important;
     }
+    */
     .blocker::before {
       content: 'BLOCKER: ';
       font-weight: bold;

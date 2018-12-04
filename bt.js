@@ -42,6 +42,8 @@ let MarkerField = {
 
 const FILE_SLICE = 256 << 10;
 
+const PREC = 6;
+
 function ensure(array, itemName, def = {}) {
   if (!(itemName in array)) {
     array[itemName] = (typeof def === "function") ? def() : def;
@@ -109,31 +111,51 @@ function LCS(s1, s2, compare) {
   return merge;
 }
 
-let display = {
-  reset: function() {
+class Display {
+  constructor(timeline) {
+    this.timeline = timeline;
+    this.reset();
+  }
+
+  reset() {
     this.defered = [];
     this.markers = {};
-    $("#timeline").empty();
-  },
+    this.timeline.empty();
+  }
 
-  gid: function(marker) {
+  gid(marker) {
     return `${marker.tid}:${marker.id}`; // assume tids are unique cross profiles...
-  },
+  }
 
-  defer: function(element) {
+  sub(target) {
+    this.defer({ element: target });
+    return new Display(target);
+  }
+
+  defer(element) {
     element.order = this.defered.length;
     this.defered.push(element);
     return element;
-  },
+  }
 
-  deferMarker: function(bt, marker, msg = "", short = false) {
+  deferMarker(bt, marker, msg = "", short = false) {
     let element = this.markers[this.gid(marker)];
+
+    let name = "";
+    switch (marker.type) {
+      case MarkerType.EXECUTE_BEGIN:
+      case MarkerType.RESPONSE_BEGIN:
+        name = bt.get(marker.backtrail).names.join("|");
+    }
+    name += marker.names.join("|");
+
     if (!element) {
       let thread = bt.threads[marker.tid];
       let process = thread.process;
       element = $("<pre>").text(
-        `${MarkerType.$(marker.type)} "${marker.names.join("|")}"` +
-        (short ? "" : `\n  ${process.name}/${thread.name}  ${msg}`)
+        `${MarkerType.$(marker.type)} "${name}"` +
+        (short ? "" : `\n  ${process.name}/${thread.name}  `) +
+        (msg ? `\n${msg}` : "")
       );
 
       element = { element, marker };
@@ -142,29 +164,42 @@ let display = {
     }
 
     return element;
-  },
+  }
 
-  deferDiffProgress: function(base, mod) {
-    let diff = Math.floor((mod - base) * 1000) / 10;
+  deferDiffProgress(base, mod) {
+    let diff = Math.floor((mod - base) * 1000) / 10 * 5;
     let element = $("<div>").addClass("full-width");
     element.append($("<div>")
       .addClass("diff-progress")
       .addClass(diff > 0 ? "plus" : "minus")
       .css("width", `${Math.min(100, Math.max(0, Math.abs(diff))) / 2}%`)
+      .prop("title", `The modified profile is ${diff > 0 ? "slower" : "faster"}`)
     );
     return this.defer({ element });
-  },
+  }
 
-  flush: function (sort = () => { }) {
+  flush(sort = () => { }) {
     let elements = Object.values(this.defered);
     sort(elements);
 
-    let timeline = $("#timeline");
     for (let element of elements) {
-      timeline.append(element.element);
+      this.timeline.append(element.element);
     }
-  },
+  }
 };
+
+let display;
+
+// This has meaning only for incomplete (partial, not gracefully closed) profile data
+class PlaceholderMarker {
+  constructor() {
+    this.type = MarkerType.NONE;
+    this.time = 0;
+    this.names = ["Placeholder for non-existent"];
+    this.id = 0;
+    this.tid = 0;
+  }
+}
 
 class Backtrack {
   constructor(files, objectives, baseline = null) {
@@ -194,7 +229,7 @@ class Backtrack {
           }
         }
       } catch (ex) {
-        this.modified.message(ex.message || ex);
+        display.defer({ element: $("<span>").text(ex.message || ex) });
         throw ex;
       } finally {
         display.flush();
@@ -323,19 +358,23 @@ class Backtrack {
       }
     }
 
+    this.cacheForwardtrail();
     this.listObjectives();
   }
 
   processLine(line, process) {
     let match = line.match(/^([^:]+):([^:]+):(.*)$/);
     if (!match) {
-      throw "Incomplete or unreadable line";
+      return;
     }
 
     let tid = parseInt(match[1]);
     let id = match[2];
     line = match[3];
     match = line.match(/^([^;]*)(?:;[^;]+)?$/)[1].split(":");
+    if (!match) {
+      return;
+    }
 
     let new_thread = (tid) => {
       return {
@@ -468,6 +507,20 @@ class Backtrack {
     }
   }
 
+  cacheForwardtrail() {
+    for (let thread of Object.values(this.threads)) {
+      for (let marker of thread.markers) {
+        if (!marker.backtrail || !marker.backtrail.id) {
+          continue;
+        }
+        this.get(marker.backtrail).forwardtrail = {
+          tid: marker.tid,
+          id: marker.id,
+        }
+      }
+    }
+  }
+
   listObjectives() {
     this.objectivesSelector.empty();
     if (!this.objectives.length) {
@@ -520,7 +573,7 @@ class Backtrack {
     let total_baseline = baselinePath[0].marker.time - baselinePath.last().marker.time;
     let total_modified = modifiedPath[0].marker.time - modifiedPath.last().marker.time;
     display.defer({ element: $("<pre>").addClass("equal cmp").text(
-      `baseline: ${total_baseline.toFixed(5)}s, modified: ${total_modified.toFixed(5)}s, difference: ${(total_modified - total_baseline).toFixed(5)}s`
+      `baseline: ${total_baseline.toFixed(PREC)}s, modified: ${total_modified.toFixed(PREC)}s, difference: ${(total_modified - total_baseline).toFixed(PREC)}s`
     ) });
     display.deferDiffProgress(total_baseline, total_modified);
 
@@ -548,21 +601,21 @@ class Backtrack {
         let base_delay_eq = 0;
         let mod_delay_eq = 0;
 
-        let text = `\nbase: +${base_delay.toFixed(5)}s, modified: +${mod_delay.toFixed(5)}s, difference: ${(mod_delay - base_delay).toFixed(5)}s`;
+        display.deferMarker(this.baseline, base.marker,
+          `base: +${base_delay.toFixed(PREC)}s, modified: +${mod_delay.toFixed(PREC)}s, difference: ${(mod_delay - base_delay).toFixed(PREC)}s`
+        ).element.addClass("equal cmp").addClass(base.className);
+        display.deferDiffProgress(base_delay, mod_delay);
+
         if (equal_prev) {
           // Calc the times to the next point where path meet each other again.
           base_delay_eq = base.marker.time - equal_prev.base.marker.time;
           mod_delay_eq = mod.marker.time - equal_prev.mod.marker.time;
-          text += `\ndifference to the next equal point: ${(mod_delay_eq - base_delay_eq).toFixed(5)}s`;
-        }
-
-        let element = display.deferMarker(this.baseline, base.marker, text);
-        element.element.addClass("equal cmp").addClass(base.className);
-
-        if (equal_prev) {
+          display.defer({
+            element: $("<pre>").addClass("equal cmp").text(
+              `\ndifference to the next equal point: ${(mod_delay_eq - base_delay_eq).toFixed(PREC)}s`
+            )
+          });
           display.deferDiffProgress(base_delay_eq, mod_delay_eq);
-        } else {
-          display.deferDiffProgress(base_delay, mod_delay);
         }
 
         if (base.trail) {
@@ -575,33 +628,59 @@ class Backtrack {
           this.blockers(mod.trail, mod.marker, collector.bind(modifiedBlockers));
 
           let blockers = LCS(baselineBlockers, modifiedBlockers, (a, b) => a.desc === b.desc);
+          if (blockers.length) {
+            let subdisp = display.sub($("<div>").addClass("blocker-container"));
+            for (let blocker of blockers) {
+              if (blocker.base && blocker.mod) {
+                let base = {
+                  begin: blocker.base.marker,
+                  end: this.baseline.forwardtrail(blocker.base.marker),
+                }
+                let mod = {
+                  begin: blocker.mod.marker,
+                  end: this.forwardtrail(blocker.mod.marker),
+                }
+                let base_time = base.end.time - base.begin.time;
+                let mod_time = mod.end.time - mod.begin.time;
+                let diff = mod_time - base_time;
 
-          for (let blocker of blockers) {
-            if (blocker.base && blocker.mod) {
-              continue;
+                subdisp.deferMarker(this.baseline, blocker.base.marker,
+                  `self-time baseline: ${base_time.toFixed(PREC)}s, modified: ${mod_time.toFixed(PREC)}s, difference: ${diff.toFixed(PREC)}s`, true
+                ).element.addClass("blocker equal");
+                subdisp.deferDiffProgress(base_time, mod_time);
+              } else if (blocker.base) {
+                let base = {
+                  begin: blocker.base.marker,
+                  end: this.baseline.forwardtrail(blocker.base.marker),
+                }
+                let base_time = base.end.time - base.begin.time;
+                subdisp.deferMarker(this.baseline, blocker.base.marker,
+                  `self-time ${base_time.toFixed(PREC)}s\n`, true
+                ).element.addClass("base blocker");
+              } else if (blocker.mod) {
+                let mod = {
+                  begin: blocker.mod.marker,
+                  end: this.forwardtrail(blocker.mod.marker),
+                }
+                let mod_time = mod.end.time - mod.begin.time;
+                subdisp.deferMarker(this, blocker.mod.marker,
+                  `self-time ${mod_time.toFixed(PREC)}s\n`, true
+                ).element.addClass("mod blocker");
+              } else {
+                this.assert(false, "No .baseline or .modified on an LCS result (blockers)");
+              }
             }
-            if (blocker.base) {
-              let element = display.deferMarker(this.baseline, blocker.base.marker, '', true);
-              element.element.addClass("base blocker");
-            }
-            if (blocker.mod) {
-              let element = display.deferMarker(this, blocker.mod.marker, '', true);
-              element.element.addClass("mod blocker");
-            }
+            subdisp.flush();
           }
         }
       } else if (base) {
         let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
-
-        let element = display.deferMarker(this.baseline, base.marker,
-          `\nbase: +${base_delay.toFixed(5)}s`);
-        element.element.addClass("base cmp").addClass(base.className);
+        display.deferMarker(this.baseline, base.marker, `base: +${base_delay.toFixed(PREC)}s`)
+          .element.addClass("base cmp").addClass(base.className);
       } else if (mod) {
         let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
-
-        let element = display.deferMarker(this, mod.marker,
-          `\nmodified: +${mod_delay.toFixed(5)}s`);
-        element.element.addClass("mod cmp").addClass(mod.className);
+        display.deferMarker(this, mod.marker, `modified: +${mod_delay.toFixed(PREC)}s`)
+          .element.addClass("mod cmp").addClass(mod.className);
       } else {
         this.assert(false, "No .baseline or .modified on an LCS result");
       }
@@ -610,7 +689,7 @@ class Backtrack {
 
   assert(cond, msg) {
     if (!cond) {
-      throw msg || "Assertion failure";
+      throw new Error(msg || "Assertion failure");
     }
   }
 
@@ -622,9 +701,14 @@ class Backtrack {
   }
 
   get(gid) {
+    if (!gid || !gid.id) {
+      return new PlaceholderMarker();
+    }
     let index = gid.id - 1; // we count from 1...
-    this.assert(index > 0);
-    return this.threads[gid.tid].markers[index];
+    this.assert(index >= 0);
+    // Can't enforce the following assertion until we gracefully close BT files on all processes
+    /* this.assert(index < this.threads[gid.tid].markers.length); */
+    return this.threads[gid.tid].markers[index] || new PlaceholderMarker();
   }
 
   prev(marker) {
@@ -671,20 +755,8 @@ class Backtrack {
   }
 
   forwardtrail(source) {
-    let gid = {
-      tid: source.tid,
-      id: source.id,
-    };
-    let at = Object.assign({}, gid);
-
-    let trail;
-    do {
-      ++at.id;
-      trail = this.get(at);
-      this.assert(trail);
-    } while (trail && (!trail.backtrail || trail.backtrail.id !== gid.id || trail.backtrail.tid !== gid.tid));
-
-    return trail;
+    let forward_gid = this.get(source).forwardtrail;
+    return this.get(forward_gid);
   }
 
   blockers(dispatch, execute_begin, collector) {
@@ -761,6 +833,8 @@ $(() => {
 
   $("#files2").prop("disabled", true);
   $("#objectives2").prop("disabled", true);
+
+  display = new Display($("#timeline"));
 
   let baseline = new Backtrack($("#files1"), $("#objectives1"));
   let modified = new Backtrack($("#files2"), $("#objectives2"), baseline);
