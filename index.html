@@ -20,12 +20,31 @@
       width: 100%;
       display: block;
       box-sizing: border-box;
+      padding: 1em 0;
     }
     #info {
       float: right;
       width: 25%;
       display: block;
       box-sizing: border-box;
+    }
+    div.full-width {
+      width: 100%;
+      display: inline-block;
+    }
+    div.diff-progress {
+      height: 1em;
+      display: inline-block;
+      margin: 0;
+    }
+    div.diff-progress.minus {
+      background-color: greenyellow;
+      margin: 0 0 0 50%;
+    }
+    div.diff-progress.plus {
+      background-color: red;
+      margin: 0 50% 0 0;
+      float: right;
     }
 
     /* these are only for individual lines of output */

@@ -110,17 +110,24 @@ function LCS(s1, s2, compare) {
 }
 
 let display = {
+  reset: function() {
+    this.defered = [];
+    this.markers = {};
+    $("#timeline").empty();
+  },
+
   gid: function(marker) {
     return `${marker.tid}:${marker.id}`; // assume tids are unique cross profiles...
   },
 
-  reset: function () {
-    this.elements = [];
-    $("#timeline").empty();
+  defer: function(element) {
+    element.order = this.defered.length;
+    this.defered.push(element);
+    return element;
   },
 
-  defer: function (bt, marker, msg = "", short = false) {
-    let element = this.elements[this.gid(marker)];
+  deferMarker: function(bt, marker, msg = "", short = false) {
+    let element = this.markers[this.gid(marker)];
     if (!element) {
       let thread = bt.threads[marker.tid];
       let process = thread.process;
@@ -130,23 +137,27 @@ let display = {
       );
 
       element = { element, marker };
-      this.elements[this.gid(marker)] = element;
+      this.defer(element);
+      this.markers[this.gid(marker)] = element;
     }
 
     return element;
   },
 
-  flush(single) {
-    let elements = Object.values(this.elements);
-    if (single) {
-      elements.sort((a, b) => {
-        return b.marker.time - a.marker.time;
-      });
-    } else {
-      elements.sort((a, b) => {
-        return a.order - b.order;
-      });
-    }
+  deferDiffProgress: function(base, mod) {
+    let diff = Math.floor((mod - base) * 1000) / 10;
+    let element = $("<div>").addClass("full-width");
+    element.append($("<div>")
+      .addClass("diff-progress")
+      .addClass(diff > 0 ? "plus" : "minus")
+      .css("width", `${Math.min(100, Math.max(0, Math.abs(diff))) / 2}%`)
+    );
+    return this.defer({ element });
+  },
+
+  flush: function (sort = () => { }) {
+    let elements = Object.values(this.defered);
+    sort(elements);
 
     let timeline = $("#timeline");
     for (let element of elements) {
@@ -177,18 +188,16 @@ class Backtrack {
           // we allow loading the modified profile.
           this.modified.filesSelector.prop("disabled", false);
           if (!this.modified.objectives.length) {
-            this.modified.objectivesSelector.empty().append($("<option>")
-              .attr("value", `0:0`)
-              .text(`Optionally load files for the modified profile to compare to`)
-            ).val("0:0");
+            this.modified.message(`Optionally load files for the modified profile to compare to`);
           } else {
             this.modified.objectivesSelector.prop("disabled", false);
           }
         }
       } catch (ex) {
+        this.modified.message(ex.message || ex);
         throw ex;
       } finally {
-        display.flush(!this.baseline);
+        display.flush();
       }
     });
 
@@ -200,6 +209,12 @@ class Backtrack {
     files.trigger("change");
   }
 
+  message(msg) {
+    this.objectivesSelector.empty().append($("<option>")
+      .attr("value", `0:0`).text(msg)
+    ).val("0:0");
+  }
+
   consumeFiles() {
     this.objectives = [];
     this.processes = {};
@@ -209,10 +224,7 @@ class Backtrack {
       return;
     }
 
-    this.objectivesSelector.empty().append($("<option>")
-      .attr("value", `0:0`)
-      .text(`Loading...`)
-    ).val(`0:0`);
+    this.message(`Loading...`);
 
     let files = [];
     for (let file of this.files) {
@@ -301,7 +313,12 @@ class Backtrack {
         let line = file.lines.shift();
 
         if (line) {
-          this.processLine(line, process);
+          try {
+            this.processLine(line, process);
+          } catch (ex) {
+            this.message(`Error during file read: ${ex.message || ex}`);
+            throw ex;
+          }
         }
       }
     }
@@ -312,7 +329,7 @@ class Backtrack {
   processLine(line, process) {
     let match = line.match(/^([^:]+):([^:]+):(.*)$/);
     if (!match) {
-      throw "match error";
+      throw "Incomplete or unreadable line";
     }
 
     let tid = parseInt(match[1]);
@@ -454,7 +471,7 @@ class Backtrack {
   listObjectives() {
     this.objectivesSelector.empty();
     if (!this.objectives.length) {
-      this.objectivesSelector.append($("<option>").attr("value", `0:0`).text("No objective found")).val(`0:0`);
+      this.message("No objective found");
       return;
     }
 
@@ -478,7 +495,7 @@ class Backtrack {
     this.backtrack(
       tid, id,
       (bt, marker, className = "") => {
-        display.defer(bt, marker).element.addClass(className);
+        display.deferMarker(bt, marker).element.addClass(className);
       },
       () => { }
     );
@@ -500,9 +517,15 @@ class Backtrack {
     let modifiedPath = [];
     this.backtrack(tid, id, collector.bind(modifiedPath), trailCollector.bind(modifiedPath));
 
+    let total_baseline = baselinePath[0].marker.time - baselinePath.last().marker.time;
+    let total_modified = modifiedPath[0].marker.time - modifiedPath.last().marker.time;
+    display.defer({ element: $("<pre>").addClass("equal cmp").text(
+      `baseline: ${total_baseline.toFixed(5)}s, modified: ${total_modified.toFixed(5)}s, difference: ${(total_modified - total_baseline).toFixed(5)}s`
+    ) });
+    display.deferDiffProgress(total_baseline, total_modified);
+
     let compare = LCS(baselinePath, modifiedPath, (a, b) => a.desc === b.desc);
 
-    let order = 0;
     while (compare.length) {
       let { base, mod } = compare.shift();
       let base_prev = compare.find(e => e.base);
@@ -533,9 +556,14 @@ class Backtrack {
           text += `\ndifference to the next equal point: ${(mod_delay_eq - base_delay_eq).toFixed(5)}s`;
         }
 
-        let element = display.defer(this.baseline, base.marker, text);
+        let element = display.deferMarker(this.baseline, base.marker, text);
         element.element.addClass("equal cmp").addClass(base.className);
-        element.order = ++order;
+
+        if (equal_prev) {
+          display.deferDiffProgress(base_delay_eq, mod_delay_eq);
+        } else {
+          display.deferDiffProgress(base_delay, mod_delay);
+        }
 
         if (base.trail) {
           this.assert(!!mod.trail, "Equal marker from the modified profile doesn't have a trail");
@@ -553,31 +581,27 @@ class Backtrack {
               continue;
             }
             if (blocker.base) {
-              let element = display.defer(this.baseline, blocker.base.marker, '', true);
+              let element = display.deferMarker(this.baseline, blocker.base.marker, '', true);
               element.element.addClass("base blocker");
-              element.order = ++order;
             }
             if (blocker.mod) {
-              let element = display.defer(this, blocker.mod.marker, '', true);
+              let element = display.deferMarker(this, blocker.mod.marker, '', true);
               element.element.addClass("mod blocker");
-              element.order = ++order;
             }
           }
         }
       } else if (base) {
         let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
 
-        let element = display.defer(this.baseline, base.marker,
+        let element = display.deferMarker(this.baseline, base.marker,
           `\nbase: +${base_delay.toFixed(5)}s`);
         element.element.addClass("base cmp").addClass(base.className);
-        element.order = ++order;
       } else if (mod) {
         let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
 
-        let element = display.defer(this, mod.marker,
+        let element = display.deferMarker(this, mod.marker,
           `\nmodified: +${mod_delay.toFixed(5)}s`);
         element.element.addClass("mod cmp").addClass(mod.className);
-        element.order = ++order;
       } else {
         this.assert(false, "No .baseline or .modified on an LCS result");
       }
