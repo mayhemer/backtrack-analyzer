@@ -346,7 +346,6 @@ class Backtrack {
         }
 
         let line = file.lines.shift();
-
         if (line) {
           try {
             this.processLine(line, process);
@@ -363,6 +362,8 @@ class Backtrack {
   }
 
   processLine(line, process) {
+    let fullLine = line;
+    
     let match = line.match(/^([^:]+):([^:]+):(.*)$/);
     if (!match) {
       return;
@@ -376,6 +377,7 @@ class Backtrack {
       return;
     }
 
+    let bt = this;
     let new_thread = (tid) => {
       return {
         tid,
@@ -384,22 +386,18 @@ class Backtrack {
         markers: [],
         rooting: [false],
         addmarker: function (id, marker) {
-          if (this.last && id == 1) {
-            throw "Two threads with the same id!";
-          }
+          bt.assertNot(this.last && id == 1, "Two threads with the same id!");
           marker.id = parseInt(id);
           marker.names = [];
           marker.rooted = this.rooted();
 
           this.last = marker;
           this.markers.push(this.last);
-          if (marker.id !== this.markers.length) {
-            throw "Missing marker? " + marker.id + " " + this.markers.length;
-          }
+          bt.assert(marker.id === this.markers.length, `Missing marker? ${marker.id}!=${this.markers.length} "${fullLine}"`);
 
           switch (marker.type) {
             case undefined:
-              throw "No marker type?";
+              bt.assert(false, "No marker type?");
             case MarkerType.STARTUP:
             case MarkerType.EXECUTE_BEGIN:
             case MarkerType.RESPONSE_BEGIN:
@@ -417,10 +415,10 @@ class Backtrack {
             case MarkerType.REDISPATCH_BEGIN:
             case MarkerType.INPUT_BEGIN:
             case MarkerType.ROOT_BEGIN:
-              this.assert(this.rooting.pop() === true);
+              bt.assert(this.rooting.pop() === true);
               break;
             case MarkerType.LOOP_BEGIN:
-              this.assert(this.rooting.pop() === false);
+              bt.assert(this.rooting.pop() === false);
               break;
           }
         },
@@ -473,6 +471,7 @@ class Backtrack {
           this.objectives.push(thread.last);
           break;
         case MarkerType.STARTUP:
+        case MarkerType.LABEL:
           thread.addmarker(id, {
             tid,
             type,
@@ -691,6 +690,10 @@ class Backtrack {
     if (!cond) {
       throw new Error(msg || "Assertion failure");
     }
+  }
+
+  assertNot(cond, msg) {
+    this.assert(!cond, msg);
   }
 
   descriptor(marker) {
