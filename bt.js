@@ -43,6 +43,7 @@ let MarkerField = {
 const FILE_SLICE = 256 << 10;
 
 const PREC = 6;
+const BLOCKER_LISTING_THRESHOLD = 0.01;
 
 function ensure(array, itemName, def = {}) {
   if (!(itemName in array)) {
@@ -544,13 +545,63 @@ class Backtrack {
   }
 
   baselineProfile(tid, id) {
+    let records = [];
     this.backtrack(
       tid, id,
       (bt, marker, className = "") => {
-        display.deferMarker(bt, marker).element.addClass(className);
+        let last = records.last() || {};
+        records.push({ marker, className });
+        last.prev = records.last();
       },
-      () => { }
+      (bt, trail, marker) => { 
+        let last = records.last();
+        bt.assert(last.marker === marker);
+
+        last.trail = trail;
+        last.blockers = [];
+        bt.blockers(trail, marker, (bt, blocker) => {
+          last.blockers.push(blocker);
+        });
+        console.log(last.blockers);
+      }
     );
+    for (let record of records) {
+      let { marker, className } = record;
+      let prev = record.prev && record.prev.marker;
+      let blockers = [];
+      let message;
+      if (prev) {
+        message = `delay: ${(marker.time - prev.time).toFixed(PREC)}s`;
+        if (record.blockers && record.blockers.length) {
+          message += `, blocker count: ${record.blockers.length}`;
+          let sorted = Array.from(record.blockers).sort((a, b) => {
+            let af = this.forwardtrail(a);
+            let bf = this.forwardtrail(b);
+            return (bf.time - b.time) - (af.time - a.time);
+          });
+
+          blockers = sorted.filter(blocker => {
+            let edge = Math.min(this.forwardtrail(blocker).time, marker.time);
+            let time = edge - blocker.time;
+            return time > BLOCKER_LISTING_THRESHOLD;
+          });
+        }
+      }
+      display.deferMarker(this, marker, message).element.addClass(className);
+      if (blockers.length) {
+        let sub = display.sub($("<div>").addClass("blocker-container"));
+        sub.defer({ element: $("<span>").text(`Blockers over ${BLOCKER_LISTING_THRESHOLD * 1000}ms, sorted`) });
+        for (let blocker of blockers) {
+          let forward = this.forwardtrail(blocker);
+          let time = forward.time - blocker.time;
+          let source = this.backtrack(blocker.tid, blocker.id, () => { });
+          sub.deferMarker(this, blocker,
+            `self-time: ${time.toFixed(PREC)}s\nsource event: ${source.names.join("|")} @${source.time}s`
+          ).element.addClass("blocker alone");
+        }
+        sub.flush();
+      }
+    }
   }
 
   compareProfiles(tid, id) {
@@ -572,9 +623,10 @@ class Backtrack {
     let total_baseline = baselinePath[0].marker.time - baselinePath.last().marker.time;
     let total_modified = modifiedPath[0].marker.time - modifiedPath.last().marker.time;
     display.defer({ element: $("<pre>").addClass("equal cmp").text(
-      `baseline: ${total_baseline.toFixed(PREC)}s, modified: ${total_modified.toFixed(PREC)}s, difference: ${(total_modified - total_baseline).toFixed(PREC)}s`
+      `OVERALL STATISTICS\nbaseline: ${total_baseline.toFixed(PREC)}s, modified: ${total_modified.toFixed(PREC)}s, difference: ${(total_modified - total_baseline).toFixed(PREC)}s`
     ) });
     display.deferDiffProgress(total_baseline, total_modified);
+    display.defer({ element: $("<hr>") });
 
     let compare = LCS(baselinePath, modifiedPath, (a, b) => a.desc === b.desc);
 
