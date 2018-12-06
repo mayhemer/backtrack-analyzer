@@ -566,7 +566,6 @@ class Backtrack {
         bt.blockers(trail, marker, (bt, blocker) => {
           last.blockers.push(blocker);
         });
-        console.log(last.blockers);
       }
     );
     for (let record of records) {
