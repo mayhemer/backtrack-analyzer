@@ -42,8 +42,8 @@ let MarkerField = {
 
 const FILE_SLICE = 256 << 10;
 
-const PREC = 6;
-const BLOCKER_LISTING_THRESHOLD = 0.01;
+const PREC = 1;
+const BLOCKER_LISTING_THRESHOLD_MS = 10;
 
 function ensure(array, itemName, def = {}) {
   if (!(itemName in array)) {
@@ -362,6 +362,10 @@ class Backtrack {
     this.listObjectives();
   }
 
+  parseTime(timeString) {
+    return parseFloat(timeString) * 1000;
+  }
+
   processLine(line, process) {
     let fullLine = line;
     
@@ -467,7 +471,7 @@ class Backtrack {
           thread.addmarker(id, {
             tid,
             type,
-            time: parseFloat(match[1]),
+            time: this.parseTime(match[1]),
           });
           this.objectives.push(thread.last);
           break;
@@ -476,7 +480,7 @@ class Backtrack {
           thread.addmarker(id, {
             tid,
             type,
-            time: parseFloat(match[1]),
+            time: this.parseTime(match[1]),
           });
           break;
         case MarkerType.DISPATCH:
@@ -496,7 +500,7 @@ class Backtrack {
           thread.addmarker(id, {
             tid,
             type,
-            time: parseFloat(match[1]),
+            time: this.parseTime(match[1]),
             backtrail: {
               tid: parseInt(match[2]),
               id: parseInt(match[3])
@@ -538,7 +542,7 @@ class Backtrack {
       this.objectivesSelector
         .append($("<option>")
           .attr("value", `${obj.tid}:${obj.id}`)
-          .text(`${obj.names.join("|")} @${obj.time}s → ${obj.source.names.join("|")} @${obj.source.time}s`)
+          .text(`${obj.names.join("|")} @${obj.time.toFixed(PREC)}ms → ${obj.source.names.join("|")} @${obj.source.time.toFixed(PREC)}ms`)
         );
     }
     this.objectivesSelector.val(`0:0`);
@@ -571,32 +575,26 @@ class Backtrack {
       let blockers = [];
       let message;
       if (prev) {
-        message = `delay: ${(marker.time - prev.time).toFixed(PREC)}s`;
+        message = `delay: ${(marker.time - prev.time).toFixed(PREC)}ms`;
         if (record.blockers && record.blockers.length) {
           message += `, blocker count: ${record.blockers.length}`;
-          let sorted = Array.from(record.blockers).sort((a, b) => {
-            let af = this.forwardtrail(a);
-            let bf = this.forwardtrail(b);
-            return (bf.time - b.time) - (af.time - a.time);
-          });
-
-          blockers = sorted.filter(blocker => {
+          blockers = record.blockers.filter(blocker => {
             let edge = Math.min(this.forwardtrail(blocker).time, marker.time);
             let time = edge - blocker.time;
-            return time > BLOCKER_LISTING_THRESHOLD;
+            return time > BLOCKER_LISTING_THRESHOLD_MS;
           });
         }
       }
       display.deferMarker(this, marker, message).element.addClass(className);
       if (blockers.length) {
         let sub = display.sub($("<div>").addClass("blocker-container"));
-        sub.defer({ element: $("<span>").text(`Blockers over ${BLOCKER_LISTING_THRESHOLD * 1000}ms, sorted`) });
+        sub.defer({ element: $("<span>").text(`Blockers over ${BLOCKER_LISTING_THRESHOLD_MS}ms`) });
         for (let blocker of blockers) {
           let forward = this.forwardtrail(blocker);
           let time = forward.time - blocker.time;
           let source = this.backtrack(blocker.tid, blocker.id, () => { });
           sub.deferMarker(this, blocker,
-            `self-time: ${time.toFixed(PREC)}s\nsource event: ${source.names.join("|")} @${source.time}s`
+            `self-time: ${time.toFixed(PREC)}ms\nsource event: ${MarkerType.$(source.type)} "${source.names.join("|")}" @${source.time.toFixed(PREC)}ms`
           ).element.addClass("blocker alone");
         }
         sub.flush();
@@ -623,7 +621,7 @@ class Backtrack {
     let total_baseline = baselinePath[0].marker.time - baselinePath.last().marker.time;
     let total_modified = modifiedPath[0].marker.time - modifiedPath.last().marker.time;
     display.defer({ element: $("<pre>").addClass("equal cmp").text(
-      `OVERALL STATISTICS\nbaseline: ${total_baseline.toFixed(PREC)}s, modified: ${total_modified.toFixed(PREC)}s, difference: ${(total_modified - total_baseline).toFixed(PREC)}s`
+      `OVERALL STATISTICS\nbaseline: ${total_baseline.toFixed(PREC)}ms, modified: ${total_modified.toFixed(PREC)}ms, difference: ${(total_modified - total_baseline).toFixed(PREC)}ms`
     ) });
     display.deferDiffProgress(total_baseline, total_modified);
     display.defer({ element: $("<hr>") });
@@ -653,7 +651,7 @@ class Backtrack {
         let mod_delay_eq = 0;
 
         display.deferMarker(this.baseline, base.marker,
-          `base: +${base_delay.toFixed(PREC)}s, modified: +${mod_delay.toFixed(PREC)}s, difference: ${(mod_delay - base_delay).toFixed(PREC)}s`
+          `base: +${base_delay.toFixed(PREC)}ms, modified: +${mod_delay.toFixed(PREC)}ms, difference: ${(mod_delay - base_delay).toFixed(PREC)}ms`
         ).element.addClass("equal cmp").addClass(base.className);
         display.deferDiffProgress(base_delay, mod_delay);
 
@@ -663,7 +661,7 @@ class Backtrack {
           mod_delay_eq = mod.marker.time - equal_prev.mod.marker.time;
           display.defer({
             element: $("<pre>").addClass("equal cmp").text(
-              `\ndifference to the next equal point: ${(mod_delay_eq - base_delay_eq).toFixed(PREC)}s`
+              `\ndifference to the next equal point: ${(mod_delay_eq - base_delay_eq).toFixed(PREC)}ms`
             )
           });
           display.deferDiffProgress(base_delay_eq, mod_delay_eq);
@@ -696,7 +694,7 @@ class Backtrack {
                 let diff = mod_time - base_time;
 
                 subdisp.deferMarker(this.baseline, blocker.base.marker,
-                  `self-time baseline: ${base_time.toFixed(PREC)}s, modified: ${mod_time.toFixed(PREC)}s, difference: ${diff.toFixed(PREC)}s`, true
+                  `self-time baseline: ${base_time.toFixed(PREC)}ms, modified: ${mod_time.toFixed(PREC)}ms, difference: ${diff.toFixed(PREC)}ms`, true
                 ).element.addClass("blocker equal");
                 subdisp.deferDiffProgress(base_time, mod_time);
               } else if (blocker.base) {
@@ -706,7 +704,7 @@ class Backtrack {
                 }
                 let base_time = base.end.time - base.begin.time;
                 subdisp.deferMarker(this.baseline, blocker.base.marker,
-                  `self-time ${base_time.toFixed(PREC)}s\n`, true
+                  `self-time ${base_time.toFixed(PREC)}ms\n`, true
                 ).element.addClass("base blocker");
               } else if (blocker.mod) {
                 let mod = {
@@ -715,7 +713,7 @@ class Backtrack {
                 }
                 let mod_time = mod.end.time - mod.begin.time;
                 subdisp.deferMarker(this, blocker.mod.marker,
-                  `self-time ${mod_time.toFixed(PREC)}s\n`, true
+                  `self-time ${mod_time.toFixed(PREC)}ms\n`, true
                 ).element.addClass("mod blocker");
               } else {
                 this.assert(false, "No .baseline or .modified on an LCS result (blockers)");
@@ -726,11 +724,11 @@ class Backtrack {
         }
       } else if (base) {
         let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
-        display.deferMarker(this.baseline, base.marker, `base: +${base_delay.toFixed(PREC)}s`)
+        display.deferMarker(this.baseline, base.marker, `base: +${base_delay.toFixed(PREC)}ms`)
           .element.addClass("base cmp").addClass(base.className);
       } else if (mod) {
         let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
-        display.deferMarker(this, mod.marker, `modified: +${mod_delay.toFixed(PREC)}s`)
+        display.deferMarker(this, mod.marker, `modified: +${mod_delay.toFixed(PREC)}ms`)
           .element.addClass("mod cmp").addClass(mod.className);
       } else {
         this.assert(false, "No .baseline or .modified on an LCS result");
