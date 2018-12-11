@@ -558,10 +558,11 @@ class Backtrack {
     this.objectivesSelector.append($("<option>").attr("value", `0:0`).text("Select objective"));
     for (let obj of this.objectives) {
       obj.source = this.backtrack(obj.tid, obj.id, () => { });
+      let time = obj.time - obj.source.time;
       this.objectivesSelector
         .append($("<option>")
           .attr("value", `${obj.tid}:${obj.id}`)
-          .text(`${obj.names.join("|")} @${obj.time.toFixed(PREC)}ms → ${obj.source.names.join("|")} @${obj.source.time.toFixed(PREC)}ms`)
+          .text(`(${time.toFixed(PREC)}ms) ${obj.names.join("|")} @${obj.time.toFixed(PREC)}ms → ${obj.source.names.join("|")} @${obj.source.time.toFixed(PREC)}ms`)
         );
     }
     this.objectivesSelector.val(`0:0`);
