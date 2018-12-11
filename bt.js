@@ -232,11 +232,11 @@ class Backtrack {
     this.objectivesSelector.on("change", (event) => {
       display.reset();
       try {
-        let [tid, id] = this.objectivesSelector.val().split(":").map(id => parseInt(id));
+        let [tid, id, break_tid, break_id] = this.objectivesSelector.val().split(":").map(id => parseInt(id));
         if (this.baseline) {
-          this.compareProfiles(tid, id);
+          this.compareProfiles(tid, id, break_tid, break_id);
         } else {
-          this.baselineProfile(tid, id);
+          this.baselineProfile(tid, id, break_tid, break_id);
           if (tid === 0 && id === 0) {
             this.modified.filesSelector.prop("disabled", true);
             return;
@@ -256,6 +256,8 @@ class Backtrack {
       } finally {
         display.flush();
       }
+    }).on("select2:open", () => {
+      $(".select2-search__field").prop("placeholder", "Search: REGEXP [SPACE REGEXP...] to list objectives matching ALL the regexp terms");
     });
 
     files.on("change", (event) => {
@@ -268,8 +270,8 @@ class Backtrack {
 
   message(msg) {
     this.objectivesSelector.empty().append($("<option>")
-      .attr("value", `0:0`).text(msg)
-    ).val("0:0");
+      .attr("value", `0:0:0:0`).text(msg)
+    ).val("0:0:0:0");
   }
 
   consumeFiles() {
@@ -553,31 +555,31 @@ class Backtrack {
       return;
     }
 
-    if (!this.baseline || this.baseline.objectivesSelector.val() != "0:0") {
+    if (!this.baseline || this.baseline.objectivesSelector.val() != "0:0:0:0") {
       this.objectivesSelector.prop("disabled", false);
     }
 
-    this.objectivesSelector.append($("<option>").attr("value", `0:0`).text("Select objective"));
+    this.objectivesSelector.append($("<option>").attr("value", `0:0:0:0`).text("Select objective"));
     for (let obj of this.objectives) {
       obj.labels = [];
-      obj.source = this.backtrack(obj.tid, obj.id, () => { }, () => { }, (bt, label) => obj.labels.push(label));
+      obj.source = this.backtrack(obj.tid, obj.id, 0, 0, () => { }, () => { }, (bt, label) => obj.labels.push(label));
       let sources = obj.labels.concat([obj.source]);
       for (let source of sources) {
         let time = obj.time - source.time;
         this.objectivesSelector
           .append($("<option>")
-            .attr("value", `${obj.tid}:${obj.id}`)
+            .attr("value", `${obj.tid}:${obj.id}:${source.tid}:${source.id}`)
             .text(`(${time.toFixed(PREC)}ms) ${obj.names.join("|")} @${obj.time.toFixed(PREC)}ms → ${MarkerType.$(source.type)} ${source.names.join("|")} @${source.time.toFixed(PREC)}ms`)
           );
       }
     }
-    this.objectivesSelector.val(`0:0`);
+    this.objectivesSelector.val(`0:0:0:0`);
   }
 
-  baselineProfile(tid, id, indent = 0) {
+  baselineProfile(tid, id, btid, bid, indent = 0) {
     let records = [];
     this.backtrack(
-      tid, id,
+      tid, id, btid, bid,
       (bt, marker, className = "") => {
         let last = records.last() || {};
         records.push({ marker, className });
@@ -624,7 +626,7 @@ class Backtrack {
       if (record.dependent) {
         element.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
-          this.baselineProfile(marker.tid, marker.id, indent + 10);
+          this.baselineProfile(marker.tid, marker.id, 0, 0, indent + 10);
           display.flush((elements) => {
             elements.sort((a, b) => b.marker.time - a.marker.time);
           });
@@ -645,7 +647,7 @@ class Backtrack {
         for (let blocker of blockers) {
           let forward = this.forwardtrail(blocker);
           let time = forward.time - blocker.time;
-          let source = this.backtrack(blocker.tid, blocker.id, () => { });
+          let source = this.backtrack(blocker.tid, blocker.id, 0, 0, () => { });
           sub.deferMarker(this, blocker,
             `self-time: ${time.toFixed(PREC)}ms\nsource event: ${MarkerType.$(source.type)} "${source.names.join("|")}" @${source.time.toFixed(PREC)}ms`
           ).element.addClass("blocker alone");
@@ -655,7 +657,7 @@ class Backtrack {
     }
   }
 
-  compareProfiles(tid, id) {
+  compareProfiles(tid, id, break_tid, break_id) {
     let collector = function (bt, marker, className) {
       this.push({ marker, desc: bt.descriptor(marker), className });
     };
@@ -664,12 +666,12 @@ class Backtrack {
       this.last().trail = trail;
     };
 
-    let [btid, bid] = this.baseline.objectivesSelector.val().split(":").map(id => parseInt(id));
+    let [btid, bid, break_btid, break_bid] = this.baseline.objectivesSelector.val().split(":").map(id => parseInt(id));
     let baselinePath = [];
-    this.baseline.backtrack(btid, bid, collector.bind(baselinePath), trailCollector.bind(baselinePath));
+    this.baseline.backtrack(btid, bid, break_btid, break_bid, collector.bind(baselinePath), trailCollector.bind(baselinePath));
 
     let modifiedPath = [];
-    this.backtrack(tid, id, collector.bind(modifiedPath), trailCollector.bind(modifiedPath));
+    this.backtrack(tid, id, break_tid, break_id, collector.bind(modifiedPath), trailCollector.bind(modifiedPath));
 
     let total_baseline = baselinePath[0].marker.time - baselinePath.last().marker.time;
     let total_modified = modifiedPath[0].marker.time - modifiedPath.last().marker.time;
@@ -879,8 +881,9 @@ class Backtrack {
     }
   }
 
-  backtrack(tid, id, collector, blocker_trail = () => { }, labels = () => { }) {
+  backtrack(tid, id, break_tid, break_id, collector, blocker_trail = () => { }, labels = () => { }) {
     let marker = this.get({ tid, id });
+    let label = this.get({ tid: break_tid, id: break_id });
     while (marker) {
       switch (marker.type) {
         case MarkerType.ROOT_BEGIN:
@@ -924,6 +927,9 @@ class Backtrack {
         case MarkerType.LABEL:
           collector(this, marker);
           labels(this, marker);
+          if (marker === label) {
+            return marker;
+          }
           marker = this.prev(marker);
           break;
         default:
@@ -937,9 +943,9 @@ class Backtrack {
 
 $(() => {
   $("#objectives1").append($("<option>")
-    .attr("value", `0:0`)
+    .attr("value", `0:0:0:0`)
     .text(`Please load files for the baseline profile`)
-  ).val(`0:0`).prop("disabled", true);
+  ).val(`0:0:0:0`).prop("disabled", true);
 
   $("#files2").prop("disabled", true);
   $("#objectives2").prop("disabled", true);
