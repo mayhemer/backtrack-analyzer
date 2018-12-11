@@ -204,6 +204,7 @@ class PlaceholderMarker {
 
 class Backtrack {
   constructor(files, objectives, baseline = null) {
+    objectives.select2({ dropdownAutoWidth: true, width: 'calc(50% - 8px)' });
     this.objectivesSelector = objectives;
     this.filesSelector = files;
     this.baseline = baseline;
@@ -886,7 +887,8 @@ $(() => {
   $("#files2").prop("disabled", true);
   $("#objectives2").prop("disabled", true);
 
-  display = new Display($("#timeline"));
+  let timeline = $("#timeline").css({ "height": "50%", });
+  display = new Display(timeline);
 
   let baseline = new Backtrack($("#files1"), $("#objectives1"));
   let modified = new Backtrack($("#files2"), $("#objectives2"), baseline);
