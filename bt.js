@@ -559,13 +559,17 @@ class Backtrack {
 
     this.objectivesSelector.append($("<option>").attr("value", `0:0`).text("Select objective"));
     for (let obj of this.objectives) {
-      obj.source = this.backtrack(obj.tid, obj.id, () => { });
-      let time = obj.time - obj.source.time;
-      this.objectivesSelector
-        .append($("<option>")
-          .attr("value", `${obj.tid}:${obj.id}`)
-          .text(`(${time.toFixed(PREC)}ms) ${obj.names.join("|")} @${obj.time.toFixed(PREC)}ms → ${obj.source.names.join("|")} @${obj.source.time.toFixed(PREC)}ms`)
-        );
+      obj.labels = [];
+      obj.source = this.backtrack(obj.tid, obj.id, () => { }, () => { }, (bt, label) => obj.labels.push(label));
+      let sources = obj.labels.concat([obj.source]);
+      for (let source of sources) {
+        let time = obj.time - source.time;
+        this.objectivesSelector
+          .append($("<option>")
+            .attr("value", `${obj.tid}:${obj.id}`)
+            .text(`(${time.toFixed(PREC)}ms) ${obj.names.join("|")} @${obj.time.toFixed(PREC)}ms → ${MarkerType.$(source.type)} ${source.names.join("|")} @${source.time.toFixed(PREC)}ms`)
+          );
+      }
     }
     this.objectivesSelector.val(`0:0`);
   }
@@ -875,7 +879,7 @@ class Backtrack {
     }
   }
 
-  backtrack(tid, id, collector, blocker_trail = () => { }) {
+  backtrack(tid, id, collector, blocker_trail = () => { }, labels = () => { }) {
     let marker = this.get({ tid, id });
     while (marker) {
       switch (marker.type) {
@@ -903,18 +907,23 @@ class Backtrack {
           marker = this.prev(trail);
           break;
         case MarkerType.ROOT_END:
-          // Rooting is not interesting now (lot of dead end markings only), unblock if it becomes intersting again...
+        case MarkerType.LOOP_END:
+          // Uninteresting, just skip
           marker = this.backtrail(marker);
           marker = this.prev(marker);
           break;
         case MarkerType.REDISPATCH_END:
         case MarkerType.EXECUTE_END:
         case MarkerType.RESPONSE_END:
-        case MarkerType.LOOP_END:
         case MarkerType.INPUT_END:
           collector(this, marker, "span");
           marker = this.backtrail(marker);
           collector(this, marker, "span");
+          marker = this.prev(marker);
+          break;
+        case MarkerType.LABEL:
+          collector(this, marker);
+          labels(this, marker);
           marker = this.prev(marker);
           break;
         default:
