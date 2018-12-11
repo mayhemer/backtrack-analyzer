@@ -128,8 +128,8 @@ class Display {
     return `${marker.tid}:${marker.id}`; // assume tids are unique cross profiles...
   }
 
-  sub(target) {
-    this.defer({ element: target });
+  sub(target, marker) {
+    this.defer({ element: target, marker });
     return new Display(target);
   }
 
@@ -162,6 +162,8 @@ class Display {
       element = { element, marker };
       this.defer(element);
       this.markers[this.gid(marker)] = element;
+    } else {
+      element.preexisting = true;
     }
 
     return element;
@@ -422,6 +424,7 @@ class Backtrack {
           switch (marker.type) {
             case undefined:
               bt.assert(false, "No marker type?");
+              break;
             case MarkerType.STARTUP:
             case MarkerType.EXECUTE_BEGIN:
             case MarkerType.RESPONSE_BEGIN:
@@ -433,21 +436,20 @@ class Backtrack {
             case MarkerType.LOOP_BEGIN:
               this.rooting.push(false);
               break;
-            case MarkerType.STARTUP:
-            case MarkerType.EXECUTE_BEGIN:
-            case MarkerType.RESPONSE_BEGIN:
-            case MarkerType.REDISPATCH_BEGIN:
-            case MarkerType.INPUT_BEGIN:
-            case MarkerType.ROOT_BEGIN:
+            case MarkerType.EXECUTE_END:
+            case MarkerType.RESPONSE_END:
+            case MarkerType.REDISPATCH_END:
+            case MarkerType.INPUT_END:
+            case MarkerType.ROOT_END:
               bt.assert(this.rooting.pop() === true);
               break;
-            case MarkerType.LOOP_BEGIN:
+            case MarkerType.LOOP_END:
               bt.assert(this.rooting.pop() === false);
               break;
           }
         },
         rooted: function () {
-          return this.rooting[0] === true;
+          return this.rooting.last() === true;
         },
       }
     };
@@ -568,7 +570,7 @@ class Backtrack {
     this.objectivesSelector.val(`0:0`);
   }
 
-  baselineProfile(tid, id) {
+  baselineProfile(tid, id, indent = 0) {
     let records = [];
     this.backtrack(
       tid, id,
@@ -582,12 +584,14 @@ class Backtrack {
         bt.assert(last.marker === marker);
 
         last.trail = trail;
+        last.dependent = marker.rooted;
         last.blockers = [];
         bt.blockers(trail, marker, (bt, blocker) => {
           last.blockers.push(blocker);
         });
       }
     );
+
     for (let record of records) {
       let { marker, className } = record;
       let prev = record.prev && record.prev.marker;
@@ -604,9 +608,35 @@ class Backtrack {
           });
         }
       }
-      display.deferMarker(this, marker, message).element.addClass(className);
+
+      if (record.dependent) {
+        message += `\n  → dependent execution`;
+      }
+      let element = display.deferMarker(this, marker, message);
+      if (element.level === undefined) {
+        element.level = indent;
+      }
+
+      if (record.dependent) {
+        element.element.addClass("clickable").on("click", () => {
+          let marker = this.prev(record.marker);
+          this.baselineProfile(marker.tid, marker.id, indent + 10);
+          display.flush((elements) => {
+            elements.sort((a, b) => b.marker.time - a.marker.time);
+          });
+        });
+      }
+
+      if (element.level < indent) {
+        // We have hit the original path
+        element.element.addClass("join");
+        break;
+      }
+
+      element.element.addClass(className).css({ "margin-left": indent + "%" })
+
       if (blockers.length) {
-        let sub = display.sub($("<div>").addClass("blocker-container"));
+        let sub = display.sub($("<div>").addClass("blocker-container"), record.marker);
         sub.defer({ element: $("<span>").text(`Blockers over ${BLOCKER_LISTING_THRESHOLD_MS}ms`) });
         for (let blocker of blockers) {
           let forward = this.forwardtrail(blocker);
@@ -785,7 +815,6 @@ class Backtrack {
 
   prev(marker) {
     let index = marker.id - 1; // we count from 1...
-    this.assert(index > 0, "No more markers to go back on a thread");
     return this.threads[marker.tid].markers[index - 1];
   }
 
