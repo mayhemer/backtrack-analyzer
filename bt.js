@@ -204,7 +204,25 @@ class PlaceholderMarker {
 
 class Backtrack {
   constructor(files, objectives, baseline = null) {
-    objectives.select2({ dropdownAutoWidth: true, width: 'calc(50% - 8px)' });
+    objectives.select2({
+      dropdownAutoWidth: true,
+      width: 'calc(50% - 8px)',
+      matcher: (params, data) => {
+        if ($.trim(params.term) === '') {
+          return data;
+        }
+        if (typeof data.text === 'undefined') {
+          return null;
+        }
+        let terms = params.term.split(" ");
+        for (let term of terms) {
+          if (!data.text.match(term)) {
+            return null;
+          }
+        }
+        return data;
+      }
+     });
     this.objectivesSelector = objectives;
     this.filesSelector = files;
     this.baseline = baseline;
