@@ -639,7 +639,7 @@ class Backtrack {
 
     let total_baseline = baselinePath[0].marker.time - baselinePath.last().marker.time;
     let total_modified = modifiedPath[0].marker.time - modifiedPath.last().marker.time;
-    display.defer({ element: $("<pre>").addClass("equal cmp").text(
+    display.defer({ element: $("<pre>").addClass("equal cmp bold").text(
       `OVERALL STATISTICS\nbaseline: ${total_baseline.toFixed(PREC)}ms, modified: ${total_modified.toFixed(PREC)}ms, difference: ${(total_modified - total_baseline).toFixed(PREC)}ms`
     ) });
     display.deferDiffProgress(total_baseline, total_modified);
