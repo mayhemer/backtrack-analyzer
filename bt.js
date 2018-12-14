@@ -229,6 +229,7 @@ class Backtrack {
     this.filesSelector = files;
     this.baseline = baseline;
 
+    let searchQueryStorage = "";
     this.objectivesSelector.on("change", (event) => {
       display.reset();
       try {
@@ -258,8 +259,15 @@ class Backtrack {
       }
     }).on("select2:open", () => {
       $(".select2-search__field").prop("placeholder", "Search: REGEXP [SPACE REGEXP...] to list objectives matching ALL the regexp terms");
+      setTimeout(function() {
+        if (searchQueryStorage && searchQueryStorage.length) {
+          $('.select2-search input').val(searchQueryStorage).trigger('input');
+        };
+      }, 0);
+    }).on('select2:closing', function() {
+      searchQueryStorage = $('.select2-search input').prop('value');
     });
-
+    
     files.on("change", (event) => {
       this.files = Array.from(event.target.files);
       this.consumeFiles();
