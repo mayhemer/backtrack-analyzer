@@ -1,5 +1,5 @@
 let MarkerType = {
-  NONE:  0,
+  AMEND:  0,
   ROOT_BEGIN:  1,
   ROOT_END:  2,
   INPUT_BEGIN:  3,
@@ -20,6 +20,7 @@ let MarkerType = {
   LOOP_BEGIN: 18,
   LOOP_END: 19,
   STARTUP: 20,
+  INFO: 21,
 
   $: function (type) {
     for (let t in this) {
@@ -142,13 +143,13 @@ class Display {
   deferMarker(bt, marker, msg = "", short = false) {
     let element = this.markers[this.gid(marker)];
 
-    let name = "";
+    let names = [];
     switch (marker.type) {
       case MarkerType.EXECUTE_BEGIN:
       case MarkerType.RESPONSE_BEGIN:
-        name = bt.get(marker.backtrail).names.join("|");
+        names = bt.get(marker.backtrail).names.slice();
     }
-    name += marker.names.join("|");
+    let name = names.concat(marker.names).join(" > ");
 
     if (!element) {
       let thread = bt.threads[marker.tid];
@@ -157,7 +158,7 @@ class Display {
         `${MarkerType.$(marker.type)} "${name}"` +
         (short ? "" : `\n  ${process.name}/${thread.name}  `) +
         (msg ? `\n${msg}` : "")
-      );
+      ).addClass(`marker-type-${MarkerType.$(marker.type).toLowerCase()}`);
 
       element = { element, marker };
       this.defer(element);
@@ -409,8 +410,18 @@ class Backtrack {
 
     let tid = parseInt(match[1]);
     let id = match[2];
+    
+    if (isNaN(tid)) {
+      if (this.last_name_amend) {
+        this.last_name_amend.names.push(line.trim());
+      }
+      return;
+    }    
+      
+    this.last_name_amend = undefined;
+
     line = match[3];
-    match = line.match(/^([^;]*)(?:;[^;]+)?$/)[1].split(":");
+    match = line.split(":");
     if (!match) {
       return;
     }
@@ -476,7 +487,7 @@ class Backtrack {
     } else if (id === "NP") {
       process.name = `${match[0]}(${process.pid})`;
       process.type = match[0];
-    } else  if (id == 0) { // Amend<>
+    } else  if (id == 0) { // Amend<>, backward compat, remove soon
       let type = parseInt(match[0]);
       switch (type) {
         case MarkerField.STATIC_NAME:
@@ -500,6 +511,29 @@ class Backtrack {
       id = parseInt(id);
       let type = parseInt(match[0]);
       switch (type) {
+        case MarkerType.AMEND:
+          let field = parseInt(match[1]);
+          switch (field) {
+            case MarkerField.STATIC_NAME:
+            case MarkerField.DYNAMIC_NAME:
+              this.last_name_amend = this.get({ tid, id });
+              this.assert(!this.last_name_amend.names.length);
+              this.last_name_amend.names.push(match.slice(2).join(":"));
+              break;
+            case MarkerField.PREVIOUS_SEQUENTIAL_DISPATCH:
+              this.get({ tid, id }).pdisp_gid = {
+                tid: parseInt(match[2]),
+                id: parseInt(match[3])
+              };
+              break;
+            case MarkerField.PREVIOUS_EXECUTE:
+              this.get({ tid, id }).pexec_gid = {
+                tid: parseInt(match[2]),
+                id: parseInt(match[3])
+              };
+              break;
+          }
+          break;
         case MarkerType.OBJECTIVE:
           thread.addmarker(id, {
             tid,
@@ -510,6 +544,7 @@ class Backtrack {
           break;
         case MarkerType.STARTUP:
         case MarkerType.LABEL:
+        case MarkerType.INFO:
           thread.addmarker(id, {
             tid,
             type,
@@ -540,6 +575,8 @@ class Backtrack {
             }
           });
           break;
+        default:
+          this.assert(false, "Missing new marker handler");
       }
     }
   }
@@ -633,7 +670,7 @@ class Backtrack {
         element.level = indent;
       }
 
-      if (record.dependent) {
+      if (false && record.dependent) {
         element.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
           this.baselineProfile(marker.tid, marker.id, 0, 0, indent + 10);
