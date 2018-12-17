@@ -230,7 +230,6 @@ class Backtrack {
     this.filesSelector = files;
     this.baseline = baseline;
 
-    let searchQueryStorage = "";
     // There is always only one!
     let searchField = () => $("input.select2-search__field");
     this.objectivesSelector.on("change", (event) => {
@@ -262,13 +261,14 @@ class Backtrack {
       }
     }).on("select2:open", () => {
       searchField().prop("placeholder", "Search: REGEXP [SPACE REGEXP...] to list objectives matching ALL the regexp terms");
-      setTimeout(function() {
-        if (searchQueryStorage && searchQueryStorage.length) {
-          searchField().val(searchQueryStorage).trigger('input');
+      setTimeout(function () {
+        let query = localStorage["search-field"];
+        if (query && query.length) {
+          searchField().val(query).trigger('input');
         };
       }, 0);
     }).on('select2:closing', function() {
-      searchQueryStorage = searchField().prop('value');
+      localStorage["search-field"] = searchField().prop('value');
     });
     
     files.on("change", (event) => {
