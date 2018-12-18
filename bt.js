@@ -143,19 +143,21 @@ class Display {
   deferMarker(bt, marker, msg = "", short = false) {
     let element = this.markers[this.gid(marker)];
 
-    let names = [];
-    switch (marker.type) {
-      case MarkerType.EXECUTE_BEGIN:
-      case MarkerType.RESPONSE_BEGIN:
-        names = bt.get(marker.backtrail).names.slice();
+    let names = marker.names;
+    if (!names.length) {
+      // No name on EXECUTE?  Fall back to DISPATCH
+      switch (marker.type) {
+        case MarkerType.EXECUTE_BEGIN:
+        case MarkerType.RESPONSE_BEGIN:
+          names = bt.get(marker.backtrail).names;
+      }
     }
-    let name = names.concat(marker.names).join(" > ");
 
     if (!element) {
       let thread = bt.threads[marker.tid];
       let process = thread.process;
       element = $("<pre>").text(
-        `${MarkerType.$(marker.type)} "${name}"` +
+        `${MarkerType.$(marker.type)} "${names.join("|")}"` +
         (short ? "" : `\n  ${process.name}/${thread.name}  `) +
         (msg ? `\n${msg}` : "")
       ).addClass(`marker-type-${MarkerType.$(marker.type).toLowerCase()}`);
