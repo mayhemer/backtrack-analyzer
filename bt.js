@@ -711,6 +711,7 @@ class Backtrack {
     let trailCollector = function (bt, trail, marker) {
       bt.assert(this.last().marker === marker);
       this.last().trail = trail;
+      this.last().dependent = marker.rooted;
     };
 
     let [btid, bid, break_btid, break_bid] = this.baseline.objectivesSelector.val().split(":").map(id => parseInt(id));
@@ -753,7 +754,9 @@ class Backtrack {
         let mod_delay_eq = 0;
 
         display.deferMarker(this.baseline, base.marker,
-          `base: +${base_delay.toFixed(PREC)}ms, modified: +${mod_delay.toFixed(PREC)}ms, difference: ${(mod_delay - base_delay).toFixed(PREC)}ms`
+          `base: +${base_delay.toFixed(PREC)}ms, modified: +${mod_delay.toFixed(PREC)}ms, difference: ${(mod_delay - base_delay).toFixed(PREC)}ms` +
+          `${base.dependent ? "\nbaseline is dependent execution" : ""}`+
+          `${mod.dependent ? "\nmodified is dependent execution" : ""}`
         ).element.addClass("equal cmp").addClass(base.className);
         display.deferDiffProgress(base_delay, mod_delay);
 
