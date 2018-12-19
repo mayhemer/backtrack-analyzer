@@ -219,11 +219,28 @@ class Backtrack {
         if (typeof data.text === 'undefined') {
           return null;
         }
-        let terms = params.term.split(" ");
-        for (let term of terms) {
-          if (!data.text.match(term)) {
-            return null;
+        if (params.stop) {
+          return null;
+        }
+        try {
+          // "TERM1\ TERM2 TERM3" will be processed as:
+          // match("TERM1 TERM2") && match("TERM3")
+          let terms = params.term.split(" ").reduce((result, term) => {
+            if (result.last() && result.last().slice(-1) === '\\') {
+              result[result.length - 1] += " " + term;
+            } else {
+              result.push(term);
+            }
+            return result;
+          }, []);
+          for (let term of terms) {
+            if (!data.text.match(term)) {
+              return null;
+            }
           }
+        } catch (ex) {
+          params.stop = true;
+          return { text: ex.message || ex };
         }
         return data;
       }
