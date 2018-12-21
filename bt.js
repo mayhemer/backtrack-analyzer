@@ -42,11 +42,12 @@ let MarkerField = {
 };
 
 const SHOW_BLOCKERS_IN_DIFF = false;
+const SHOW_BLOCKERS_IN_SINGLE = false;
+const BLOCKER_LISTING_THRESHOLD_MS = 0;
 const DEPENDECY_CLICKABLE_IN_SINGLE = false;
-const BLOCKER_LISTING_THRESHOLD_MS = 10;
 
 const FILE_SLICE = 256 << 10;
-const PREC = 1;
+const PREC = 2;
 
 function ensure(array, itemName, def = {}) {
   if (!(itemName in array)) {
@@ -174,14 +175,24 @@ class Display {
     return element;
   }
 
-  deferDiffProgress(base, mod) {
-    let diff = Math.floor((mod - base)) / 10 * 5;
+  deferDiffTimingBar(base, mod) {
+    let diff = Math.floor(mod - base) / 10 * 5;
     let element = $("<div>").addClass("full-width");
     element.append($("<div>")
       .addClass("diff-progress")
       .addClass(diff > 0 ? "plus" : "minus")
       .css("width", `${Math.min(100, Math.max(0, Math.abs(diff))) / 2}%`)
       .prop("title", `The modified profile is ${diff > 0 ? "slower" : "faster"}`)
+    );
+    return this.defer({ element });
+  }
+
+  deferTimingBar(time) {
+    time = Math.floor(time) / 10 * 5;
+    let element = $("<div>").addClass("full-width");
+    element.append($("<div>")
+      .addClass("diff-progress single")
+      .css("width", `${Math.min(100, Math.max(0, Math.abs(time)))}%`)
     );
     return this.defer({ element });
   }
@@ -697,6 +708,9 @@ class Backtrack {
         message += `\n  → dependent execution`;
       }
       let element = display.deferMarker(this, marker, message);
+      if (prev) {
+        display.deferTimingBar(marker.time - prev.time);
+      }
       if (element.level === undefined) {
         element.level = indent;
       }
@@ -721,15 +735,26 @@ class Backtrack {
 
       if (blockers.length) {
         let sub = display.sub($("<div>").addClass("blocker-container"), record.marker);
-        sub.defer({ element: $("<span>").text(`Blockers over ${BLOCKER_LISTING_THRESHOLD_MS}ms`) });
-        for (let blocker of blockers) {
-          let forward = this.forwardtrail(blocker);
-          let time = forward.time - blocker.time;
-          let source = this.backtrack(blocker.tid, blocker.id, 0, 0, () => { });
-          sub.deferMarker(this, blocker,
-            `self-time: ${time.toFixed(PREC)}ms\nsource event: ${MarkerType.$(source.type)} "${source.names.join("|")}" @${source.time.toFixed(PREC)}ms`
-          ).element.addClass("blocker alone");
-        }
+        sub.defer({ element: $("<span>").text(`Click to show blockers`).addClass("clickable").click((e) => {
+          for (let blocker of blockers) {
+            let forward = this.forwardtrail(blocker);
+            let time = forward.time - blocker.time;
+            let labels = [];
+            let source = this.backtrack(blocker.tid, blocker.id, 0, 0, () => { }, () => { }, (bt, label) => {
+              labels.push(label);
+            });
+            labels.push(source);
+            let sources = labels.reduce((result, source) => {
+              return result + `\n${MarkerType.$(source.type)} "${source.names.join("|")}" @${source.time.toFixed(PREC)}ms`;
+            }, "");
+            sub.deferMarker(this, blocker,
+              `self-time: ${time.toFixed(PREC)}ms\nsource events: ${sources}`
+            ).element.addClass("blocker alone");
+            sub.deferTimingBar(time);
+          }
+          sub.flush();
+          $(e.target).off("click").removeClass("clickable");
+        }) });
         sub.flush();
       }
     }
@@ -757,7 +782,7 @@ class Backtrack {
     display.defer({ element: $("<pre>").addClass("equal cmp bold").text(
       `OVERALL STATISTICS\nbaseline: ${total_baseline.toFixed(PREC)}ms, modified: ${total_modified.toFixed(PREC)}ms, difference: ${(total_modified - total_baseline).toFixed(PREC)}ms`
     ) });
-    display.deferDiffProgress(total_baseline, total_modified);
+    display.deferDiffTimingBar(total_baseline, total_modified);
     display.defer({ element: $("<hr>") });
 
     let compare = LCS(baselinePath, modifiedPath, (a, b) => a.desc === b.desc);
@@ -789,7 +814,7 @@ class Backtrack {
           `${base.dependent ? "\nbaseline is dependent execution" : ""}`+
           `${mod.dependent ? "\nmodified is dependent execution" : ""}`
         ).element.addClass("equal cmp").addClass(base.className);
-        display.deferDiffProgress(base_delay, mod_delay);
+        display.deferDiffTimingBar(base_delay, mod_delay);
 
         if (equal_prev) {
           // Calc the times to the next point where path meet each other again.
@@ -800,7 +825,7 @@ class Backtrack {
               `\ndifference to the next equal point: ${(mod_delay_eq - base_delay_eq).toFixed(PREC)}ms`
             )
           });
-          display.deferDiffProgress(base_delay_eq, mod_delay_eq);
+          display.deferDiffTimingBar(base_delay_eq, mod_delay_eq);
         }
 
         if (base.trail) {
@@ -832,7 +857,7 @@ class Backtrack {
                 subdisp.deferMarker(this.baseline, blocker.base.marker,
                   `self-time baseline: ${base_time.toFixed(PREC)}ms, modified: ${mod_time.toFixed(PREC)}ms, difference: ${diff.toFixed(PREC)}ms`, true
                 ).element.addClass("blocker equal");
-                subdisp.deferDiffProgress(base_time, mod_time);
+                subdisp.deferDiffTimingBar(base_time, mod_time);
               } else if (blocker.base) {
                 let base = {
                   begin: blocker.base.marker,
