@@ -307,6 +307,8 @@ class Backtrack {
   }
 
   consumeFiles() {
+    performance.mark("consume-all-begin");
+
     this.objectives = [];
     this.processes = {};
     this.threads = {};
@@ -415,6 +417,14 @@ class Backtrack {
 
     this.cacheForwardtrail();
     this.listObjectives();
+
+    performance.mark("consume-all-end");
+    performance.measure("consume-all", "consume-all-begin", "consume-all-end");
+
+    let entries = performance.getEntriesByType("measure");
+    for (let entry of entries) {
+      console.log(entry);
+    }
   }
 
   parseTime(timeString) {
