@@ -41,10 +41,12 @@ let MarkerField = {
   TIMING:  6,
 };
 
-const FILE_SLICE = 256 << 10;
-
-const PREC = 1;
+const SHOW_BLOCKERS_IN_DIFF = false;
+const DEPENDECY_CLICKABLE_IN_SINGLE = false;
 const BLOCKER_LISTING_THRESHOLD_MS = 10;
+
+const FILE_SLICE = 256 << 10;
+const PREC = 1;
 
 function ensure(array, itemName, def = {}) {
   if (!(itemName in array)) {
@@ -689,7 +691,7 @@ class Backtrack {
         element.level = indent;
       }
 
-      if (false && record.dependent) {
+      if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent) {
         element.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
           this.baselineProfile(marker.tid, marker.id, 0, 0, indent + 10);
@@ -801,7 +803,7 @@ class Backtrack {
           this.blockers(mod.trail, mod.marker, collector.bind(modifiedBlockers));
 
           let blockers = LCS(baselineBlockers, modifiedBlockers, (a, b) => a.desc === b.desc);
-          if (blockers.length) {
+          if (SHOW_BLOCKERS_IN_DIFF && blockers.length) {
             let subdisp = display.sub($("<div>").addClass("blocker-container"));
             for (let blocker of blockers) {
               if (blocker.base && blocker.mod) {
