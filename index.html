@@ -35,6 +35,13 @@
       display: block;
       box-sizing: border-box;
     }
+    #breadcrumbs {
+      margin: 1em 0;
+      font-weight: bold;
+    }
+    #breadcrumbs span {
+      cursor: pointer;
+    }
     div.full-width {
       width: 100%;
       display: inline-block;
@@ -74,7 +81,6 @@
       color: brown;
     }
     div.blocker-container {
-      /*background-color: rgb(250, 247, 239);*/
       padding: 1em 2em;
       margin: 1em 5%;
       border-left: 1px solid red;
@@ -137,5 +143,6 @@
   <br />
   <select class="half" id="objectives1" data-bt="0"></select>
   <select class="half" id="objectives2" data-bt="1"></select>
+  <div id="breadcrumbs" class="full-width"></div>
   <div id="timeline"></div>
 </body>

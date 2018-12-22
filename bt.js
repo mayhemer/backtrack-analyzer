@@ -44,7 +44,8 @@ let MarkerField = {
 const SHOW_BLOCKERS_IN_DIFF = false;
 const SHOW_BLOCKERS_IN_SINGLE = false;
 const BLOCKER_LISTING_THRESHOLD_MS = 0;
-const DEPENDECY_CLICKABLE_IN_SINGLE = false;
+const DEPENDECY_CLICKABLE_IN_SINGLE = true;
+const SHOW_DEPENDENT_PATH_FROM_EXECUTE_END = false;
 
 const FILE_SLICE = 256 << 10;
 const PREC = 2;
@@ -116,6 +117,43 @@ function LCS(s1, s2, compare) {
   return merge;
 }
 
+class Breadcrumb {
+  constructor(target, bt) {
+    this.target = target;
+    this.bt = bt;
+    this.reset();
+  }
+
+  reset() {
+    this.history = [];
+    this.rebuild();
+  }
+
+  rebuild() {
+    this.target.empty();
+    for (let { marker, label, indent, scroll } of this.history) {
+      this.target.append(" &gt; ");
+      this.target.append($("<span>").text(
+        `${MarkerType.$(marker.type)} "${marker.names.join("|").split(" ")[0]}"`
+      ).click(() => {
+        let drop = false;
+        this.history = this.history.filter((bc) => {
+          return !(drop || (drop = bc.marker === marker));
+        });
+        display.reset();
+        this.bt.baselineProfile(marker.tid, marker.id, label.tid, label.id, indent);
+        display.flush();
+        $(window).scrollTop(scroll);
+      }));
+    }
+  }
+
+  push(marker, label, indent) {
+    this.history.push({ marker, label, indent, scroll: display.prevscroll() });
+    this.rebuild();
+  }
+}
+
 class Display {
   constructor(timeline) {
     this.timeline = timeline;
@@ -125,7 +163,12 @@ class Display {
   reset() {
     this.defered = [];
     this.markers = {};
+    this.lastScroll = $(window).scrollTop();
     this.timeline.empty();
+  }
+
+  prevscroll() {
+    return this.lastScroll;
   }
 
   gid(marker) {
@@ -160,7 +203,7 @@ class Display {
       let thread = bt.threads[marker.tid];
       let process = thread.process;
       element = $("<pre>").text(
-        `${MarkerType.$(marker.type)} "${names.join("|")}"` +
+        `${MarkerType.$(marker.type)} "${names.join("|")}" @${marker.time.toFixed(PREC)}ms` +
         (short ? "" : `\n  ${process.name}/${thread.name}  `) +
         (msg ? `\n${msg}` : "")
       ).addClass(`marker-type-${MarkerType.$(marker.type).toLowerCase()}`);
@@ -207,7 +250,7 @@ class Display {
   }
 };
 
-let display;
+let display, breadcrumbs;
 
 // This has meaning only for incomplete (partial, not gracefully closed) profile data
 class PlaceholderMarker {
@@ -266,6 +309,7 @@ class Backtrack {
     let searchField = () => $("input.select2-search__field");
     this.objectivesSelector.on("change", (event) => {
       display.reset();
+      breadcrumbs.reset();
       try {
         let [tid, id, break_tid, break_id] = this.objectivesSelector.val().split(":").map(id => parseInt(id));
         if (this.baseline) {
@@ -618,7 +662,10 @@ class Backtrack {
           });
           break;
         default:
-          this.assert(false, "Missing new marker handler");
+          if (isNaN(type)) {
+            break;
+          }
+          this.assert(false, `Missing new marker handler for ${type}, ${fullLine}`);
       }
     }
   }
@@ -666,6 +713,8 @@ class Backtrack {
   }
 
   baselineProfile(tid, id, btid, bid, indent = 0) {
+    breadcrumbs.push(this.get({ tid, id }), { btid, bid }, indent);
+    
     let records = [];
     this.backtrack(
       tid, id, btid, bid,
@@ -705,7 +754,7 @@ class Backtrack {
       }
 
       if (record.dependent) {
-        message += `\n  → dependent execution`;
+        message += `\n  → dependent execution, click to show the triggering path`;
       }
       let element = display.deferMarker(this, marker, message);
       if (prev) {
@@ -718,9 +767,11 @@ class Backtrack {
       if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent) {
         element.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
-          this.baselineProfile(marker.tid, marker.id, 0, 0, indent + 10);
+          display.reset();
+          this.baselineProfile(marker.tid, marker.id, btid, bid, indent /* + 10*/);
           display.flush((elements) => {
-            elements.sort((a, b) => b.marker.time - a.marker.time);
+            // no need when we reset the display before baseline profile call
+            // elements.sort((a, b) => b.marker.time - a.marker.time);
           });
         });
       }
@@ -735,23 +786,50 @@ class Backtrack {
 
       if (blockers.length) {
         let sub = display.sub($("<div>").addClass("blocker-container"), record.marker);
-        sub.defer({ element: $("<span>").text(`Click to show blockers`).addClass("clickable").click((e) => {
+        sub.defer({ element: $("<span>").text(`click to show blockers`).addClass("clickable").click((e) => {
           for (let blocker of blockers) {
             let forward = this.forwardtrail(blocker);
             let time = forward.time - blocker.time;
             let labels = [];
-            let source = this.backtrack(blocker.tid, blocker.id, 0, 0, () => { }, () => { }, (bt, label) => {
+            let source = this.backtrack(blocker.tid, blocker.id, btid, bid, () => { }, () => { }, (bt, label) => {
               labels.push(label);
             });
             labels.push(source);
+
+            let lastSource;
+            let lastLeadName = "";
+            let leadNameCounter = 0;
             let sources = labels.reduce((result, source) => {
-              return result + `\n${MarkerType.$(source.type)} "${source.names.join("|")}" @${source.time.toFixed(PREC)}ms`;
+              let name = source.names.join("|");
+              let leadName = name.split(" ")[0];
+              if (leadName == lastLeadName) {
+                ++leadNameCounter;
+                return result;
+              }
+              if (leadNameCounter) {
+                result += `\n  +${leadNameCounter} more ${MarkerType.$(lastSource.type)} "${lastLeadName}" for different resources`;
+              }
+              lastLeadName = leadName;
+              leadNameCounter = 0;
+              lastSource = source;
+              return result + `\n• ${MarkerType.$(source.type)} "${name}" @${source.time.toFixed(PREC)}ms`;
             }, "");
+
             sub.deferMarker(this, blocker,
               `self-time: ${time.toFixed(PREC)}ms\nsource events: ${sources}`
-            ).element.addClass("blocker alone");
+            ).element.addClass("blocker alone clickable").click(() => {
+              let forward = this.forwardtrail(blocker);
+              if (!SHOW_DEPENDENT_PATH_FROM_EXECUTE_END || !forward.id) {
+                forward = blocker;
+              } else {
+                forward = this.prev(forward);
+              }
+              display.reset();
+              this.baselineProfile(forward.tid, forward.id, btid, bid, indent /* + 10*/);
+              display.flush();
+            });
             sub.deferTimingBar(time);
-          }
+           } // for blockers
           sub.flush();
           $(e.target).off("click").removeClass("clickable");
         }) });
@@ -1062,4 +1140,6 @@ $(() => {
   let baseline = new Backtrack($("#files1"), $("#objectives1"));
   let modified = new Backtrack($("#files2"), $("#objectives2"), baseline);
   baseline.modified = modified;
+
+  breadcrumbs = new Breadcrumb($("#breadcrumbs"), baseline);
 });
