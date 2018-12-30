@@ -38,7 +38,8 @@ let MarkerField = {
   BACKTRAIL:  3,
   PREVIOUS_SEQUENTIAL_DISPATCH:  4,
   PREVIOUS_EXECUTE:  5,
-  TIMING:  6,
+  TIMING: 6,
+  QUEUE_NAME: 7,
 };
 
 const SHOW_BLOCKERS_IN_DIFF = false;
@@ -603,7 +604,6 @@ class Backtrack {
             case MarkerField.STATIC_NAME:
             case MarkerField.DYNAMIC_NAME:
               this.last_name_amend = this.get({ tid, id });
-              this.assert(!this.last_name_amend.names.length);
               this.last_name_amend.names.push(match.slice(2).join(":"));
               break;
             case MarkerField.PREVIOUS_SEQUENTIAL_DISPATCH:
@@ -618,6 +618,12 @@ class Backtrack {
                 id: parseInt(match[3])
               };
               break;
+            case MarkerField.QUEUE_NAME:
+              this.last_name_amend = this.get({ tid, id });
+              this.last_name_amend.names.push(`QUEUE:[${match.slice(2).join(":")}]`);
+              break;
+            default:
+              this.assert(false, "Missing handler for new field type");
           }
           break;
         case MarkerType.OBJECTIVE:
