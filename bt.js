@@ -484,7 +484,7 @@ class Backtrack {
   }
 
   parseTime(timeString) {
-    return parseFloat(timeString) * 1000;
+    return parseFloat(timeString.replace(",", ".")) * 1000;
   }
 
   processLine(line, process) {
