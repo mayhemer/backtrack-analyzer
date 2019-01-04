@@ -622,8 +622,6 @@ class Backtrack {
               this.last_name_amend = this.get({ tid, id });
               this.last_name_amend.names.push(`QUEUE:[${match.slice(2).join(":")}]`);
               break;
-            default:
-              this.assert(false, "Missing handler for new field type");
           }
           break;
         case MarkerType.OBJECTIVE:
