@@ -395,7 +395,8 @@ class Backtrack {
           resolve({
             file: file,
             fromline: line,
-            lines: [previousLine]
+            lines: [previousLine],
+            last: true,
           });
           return;
         }
@@ -464,8 +465,10 @@ class Backtrack {
           try {
             this.processLine(line, process);
           } catch (ex) {
-            this.message(`Error during file read: ${ex.message || ex}`);
-            throw ex;
+            if (!file.last) {
+              this.message(`Error during file read: ${ex.message || ex}`);
+              throw ex;
+            }
           }
         }
       }
