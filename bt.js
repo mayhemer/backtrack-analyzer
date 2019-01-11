@@ -43,6 +43,7 @@ let MarkerField = {
 };
 
 const SHOW_BLOCKERS_IN_DIFF = false;
+const BLOCKER_IN_DIFF_TH = 80;
 const SHOW_BLOCKERS_IN_SINGLE = false;
 const BLOCKER_LISTING_THRESHOLD_MS = 0;
 const DEPENDECY_CLICKABLE_IN_SINGLE = true;
@@ -224,7 +225,7 @@ class Display {
     let element = $("<div>").addClass("full-width");
     element.append($("<div>")
       .addClass("diff-progress")
-      .addClass(diff > 0 ? "plus" : "minus")
+      .addClass(diff < 0 ? "plus" : diff > 0 ? "minus" : "")
       .css("width", `${Math.min(100, Math.max(0, Math.abs(diff))) / 2}%`)
       .prop("title", `The modified profile is ${diff > 0 ? "slower" : "faster"}`)
     );
@@ -623,7 +624,7 @@ class Backtrack {
               break;
             case MarkerField.QUEUE_NAME:
               this.last_name_amend = this.get({ tid, id });
-              this.last_name_amend.names.push(`QUEUE:[${match.slice(2).join(":")}]`);
+              this.last_name_amend.names.push(`[on queue: ${match.slice(2).join(":")}]`);
               break;
           }
           break;
@@ -902,7 +903,7 @@ class Backtrack {
         display.deferDiffTimingBar(base_delay, mod_delay);
 
         if (equal_prev) {
-          // Calc the times to the next point where path meet each other again.
+          // Calc the times to the next point where paths meet each other again.
           base_delay_eq = base.marker.time - equal_prev.base.marker.time;
           mod_delay_eq = mod.marker.time - equal_prev.mod.marker.time;
           display.defer({
@@ -922,50 +923,58 @@ class Backtrack {
           let modifiedBlockers = [];
           this.blockers(mod.trail, mod.marker, collector.bind(modifiedBlockers));
 
-          let blockers = LCS(baselineBlockers, modifiedBlockers, (a, b) => a.desc === b.desc);
-          if (SHOW_BLOCKERS_IN_DIFF && blockers.length) {
-            let subdisp = display.sub($("<div>").addClass("blocker-container"));
-            for (let blocker of blockers) {
-              if (blocker.base && blocker.mod) {
-                let base = {
-                  begin: blocker.base.marker,
-                  end: this.baseline.forwardtrail(blocker.base.marker),
-                }
-                let mod = {
-                  begin: blocker.mod.marker,
-                  end: this.forwardtrail(blocker.mod.marker),
-                }
-                let base_time = base.end.time - base.begin.time;
-                let mod_time = mod.end.time - mod.begin.time;
-                let diff = mod_time - base_time;
+          let delay_diff = Math.abs(base_delay - mod_delay);
 
-                subdisp.deferMarker(this.baseline, blocker.base.marker,
-                  `self-time baseline: ${base_time.toFixed(PREC)}ms, modified: ${mod_time.toFixed(PREC)}ms, difference: ${diff.toFixed(PREC)}ms`, true
-                ).element.addClass("blocker equal");
-                subdisp.deferDiffTimingBar(base_time, mod_time);
-              } else if (blocker.base) {
-                let base = {
-                  begin: blocker.base.marker,
-                  end: this.baseline.forwardtrail(blocker.base.marker),
+          let blockers = LCS(baselineBlockers, modifiedBlockers, (a, b) => a.desc === b.desc);
+          if (blockers.length) {
+            let sub = display.sub($("<div>").addClass("blocker-container"), base.marker);
+            sub.defer({
+              element: $("<span>").text(`click to show blockers`).addClass("clickable").click((e) => {
+                for (let blocker of blockers) {
+                  if (blocker.base && blocker.mod) {
+                    let base = {
+                      begin: blocker.base.marker,
+                      end: this.baseline.forwardtrail(blocker.base.marker),
+                    }
+                    let mod = {
+                      begin: blocker.mod.marker,
+                      end: this.forwardtrail(blocker.mod.marker),
+                    }
+                    let base_time = base.end.time - base.begin.time;
+                    let mod_time = mod.end.time - mod.begin.time;
+                    let diff = mod_time - base_time;
+
+                    sub.deferMarker(this.baseline, blocker.base.marker,
+                      `self-time baseline: ${base_time.toFixed(PREC)}ms, modified: ${mod_time.toFixed(PREC)}ms, difference: ${diff.toFixed(PREC)}ms`, true
+                    ).element.addClass("blocker equal");
+                    sub.deferDiffTimingBar(base_time, mod_time);
+                  } else if (blocker.base) {
+                    let base = {
+                      begin: blocker.base.marker,
+                      end: this.baseline.forwardtrail(blocker.base.marker),
+                    }
+                    let base_time = base.end.time - base.begin.time;
+                    sub.deferMarker(this.baseline, blocker.base.marker,
+                      `self-time ${base_time.toFixed(PREC)}ms\n`, true
+                    ).element.addClass("base blocker");
+                  } else if (blocker.mod) {
+                    let mod = {
+                      begin: blocker.mod.marker,
+                      end: this.forwardtrail(blocker.mod.marker),
+                    }
+                    let mod_time = mod.end.time - mod.begin.time;
+                    sub.deferMarker(this, blocker.mod.marker,
+                      `self-time ${mod_time.toFixed(PREC)}ms\n`, true
+                    ).element.addClass("mod blocker");
+                  } else {
+                    this.assert(false, "No .baseline or .modified on an LCS result (blockers)");
+                  }
                 }
-                let base_time = base.end.time - base.begin.time;
-                subdisp.deferMarker(this.baseline, blocker.base.marker,
-                  `self-time ${base_time.toFixed(PREC)}ms\n`, true
-                ).element.addClass("base blocker");
-              } else if (blocker.mod) {
-                let mod = {
-                  begin: blocker.mod.marker,
-                  end: this.forwardtrail(blocker.mod.marker),
-                }
-                let mod_time = mod.end.time - mod.begin.time;
-                subdisp.deferMarker(this, blocker.mod.marker,
-                  `self-time ${mod_time.toFixed(PREC)}ms\n`, true
-                ).element.addClass("mod blocker");
-              } else {
-                this.assert(false, "No .baseline or .modified on an LCS result (blockers)");
-              }
-            }
-            subdisp.flush();
+                sub.flush();
+                $(e.target).off("click").removeClass("clickable");
+              })
+            });
+            sub.flush();
           }
         }
       } else if (base) {

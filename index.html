@@ -52,11 +52,11 @@
       margin: 0;
     }
     div.diff-progress.minus {
-      background-color: greenyellow;
+      background-color: red;
       margin: 0 0 0 50%;
     }
     div.diff-progress.plus {
-      background-color: red;
+      background-color: greenyellow;
       margin: 0 50% 0 0;
       float: right;
     }
@@ -120,6 +120,9 @@
     .span {
       margin-left: 4em;
       color: gray !important;
+    }
+    .span::before {
+      content: "nested: ";
     }
     .join {
       color: black;
