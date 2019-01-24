@@ -142,7 +142,6 @@ class Breadcrumb {
         this.history = this.history.filter((bc) => {
           return !(drop || (drop = bc.marker === marker));
         });
-        display.reset();
         this.bt.baselineProfile(marker.tid, marker.id, label.tid, label.id, indent);
         display.flush();
         $(window).scrollTop(scroll);
@@ -151,7 +150,10 @@ class Breadcrumb {
   }
 
   push(marker, label, indent) {
-    this.history.push({ marker, label, indent, scroll: display.prevscroll() });
+    if (this.history.length) {
+      this.history.last().scroll = $(window).scrollTop();
+    }
+    this.history.push({ marker, label, indent, scroll: 0 });
     this.rebuild();
   }
 }
@@ -165,12 +167,8 @@ class Display {
   reset() {
     this.defered = [];
     this.markers = {};
-    this.lastScroll = $(window).scrollTop();
     this.timeline.empty();
-  }
-
-  prevscroll() {
-    return this.lastScroll;
+    $(window).scrollTop(0);
   }
 
   gid(marker) {
@@ -722,6 +720,7 @@ class Backtrack {
 
   baselineProfile(tid, id, btid, bid, indent = 0) {
     breadcrumbs.push(this.get({ tid, id }), { btid, bid }, indent);
+    display.reset();
     
     let records = [];
     this.backtrack(
@@ -775,7 +774,6 @@ class Backtrack {
       if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent) {
         element.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
-          display.reset();
           this.baselineProfile(marker.tid, marker.id, btid, bid, indent /* + 10*/);
           display.flush((elements) => {
             // no need when we reset the display before baseline profile call
@@ -832,7 +830,6 @@ class Backtrack {
               } else {
                 forward = this.prev(forward);
               }
-              display.reset();
               this.baselineProfile(forward.tid, forward.id, btid, bid, indent /* + 10*/);
               display.flush();
             });
