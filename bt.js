@@ -16,11 +16,13 @@ let MarkerType = {
   BRANCH:  14,
   SLEEP:  15,
   WAKE:  16,
-  LABEL: 17,
-  LOOP_BEGIN: 18,
-  LOOP_END: 19,
-  STARTUP: 20,
-  INFO: 21,
+  LABEL_BEGIN: 17,
+  LABEL_END: 18,
+  LOOP_BEGIN: 19,
+  LOOP_END: 20,
+  STARTUP: 21,
+  INFO: 22,
+  MILESTONE: 23,
 
   $: function (type) {
     for (let t in this) {
@@ -48,6 +50,8 @@ const SHOW_BLOCKERS_IN_SINGLE = false;
 const BLOCKER_LISTING_THRESHOLD_MS = 0;
 const DEPENDECY_CLICKABLE_IN_SINGLE = true;
 const SHOW_DEPENDENT_PATH_FROM_EXECUTE_END = false;
+const COALESCE_LABELS_IN_BLOCKER_LIST = false;
+const SHOW_ONLY_MILESTONES = true;
 
 const FILE_SLICE = 256 << 10;
 const PREC = 2;
@@ -473,6 +477,14 @@ class Backtrack {
       }
     }
 
+    this.info = { CPUS: 1 };
+    if (this.startupmarker) {
+      let info = this.startupmarker.names.join(" ");
+      this.info.CPUS = (cpus => cpus ? cpus[1] : 1)(info.match(/CPUS=(\d+)/));
+    }
+
+    console.log(this.info);
+
     this.cacheForwardtrail();
     this.listObjectives();
 
@@ -576,26 +588,6 @@ class Backtrack {
     } else if (id === "NP") {
       process.name = `${match[0]}(${process.pid})`;
       process.type = match[0];
-    } else  if (id == 0) { // Amend<>, backward compat, remove soon
-      let type = parseInt(match[0]);
-      switch (type) {
-        case MarkerField.STATIC_NAME:
-        case MarkerField.DYNAMIC_NAME:
-          thread.last.names.push(match.slice(1).join(":"));
-          break;
-        case MarkerField.PREVIOUS_SEQUENTIAL_DISPATCH:
-          thread.last.pdisp_gid = {
-            tid: parseInt(match[1]),
-            id: parseInt(match[2])
-          };
-          break;
-        case MarkerField.PREVIOUS_EXECUTE:
-          thread.last.pexec_gid = {
-            tid: parseInt(match[1]),
-            id: parseInt(match[2])
-          };
-          break;
-      }
     } else { // Mark<>
       id = parseInt(id);
       let type = parseInt(match[0]);
@@ -635,7 +627,13 @@ class Backtrack {
           this.objectives.push(thread.last);
           break;
         case MarkerType.STARTUP:
-        case MarkerType.LABEL:
+          thread.addmarker(id, {
+            tid,
+            type,
+            time: this.parseTime(match[1]),
+          });
+          this.startupmarker = thread.last;
+          break;
         case MarkerType.INFO:
           thread.addmarker(id, {
             tid,
@@ -651,12 +649,17 @@ class Backtrack {
         case MarkerType.EXECUTE_BEGIN:
         case MarkerType.RESPONSE_BEGIN:
         case MarkerType.LOOP_BEGIN:
+        case MarkerType.LABEL_BEGIN:
         case MarkerType.ROOT_END:
         case MarkerType.INPUT_END:
         case MarkerType.REDISPATCH_END:
         case MarkerType.EXECUTE_END:
         case MarkerType.RESPONSE_END:
         case MarkerType.LOOP_END:
+        case MarkerType.LABEL_END:
+        case MarkerType.SLEEP:
+        case MarkerType.WAKE:
+        case MarkerType.MILESTONE:
           thread.addmarker(id, {
             tid,
             type,
@@ -721,14 +724,32 @@ class Backtrack {
   baselineProfile(tid, id, btid, bid, indent = 0) {
     breadcrumbs.push(this.get({ tid, id }), { btid, bid }, indent);
     display.reset();
+
+    let isMilestone = (marker) => {
+      if (!SHOW_ONLY_MILESTONES) {
+        return true;
+      }
+      switch (marker.type) {
+        case MarkerType.OBJECTIVE:
+        case MarkerType.MILESTONE:
+        case MarkerType.INPUT_BEGIN:
+        case MarkerType.LABEL_BEGIN:
+          return true;
+        default:
+          return false;
+      }
+    };
     
     let records = [];
+    let milestone = {};
     this.backtrack(
       tid, id, btid, bid,
       (bt, marker, className = "") => {
-        let last = records.last() || {};
         records.push({ marker, className });
-        last.prev = records.last();
+        if (isMilestone(marker)) {
+          milestone.prev = records.last();
+          milestone = records.last();
+        }
       },
       (bt, trail, marker) => { 
         let last = records.last();
@@ -745,7 +766,13 @@ class Backtrack {
 
     for (let record of records) {
       let { marker, className } = record;
+
+      if (SHOW_ONLY_MILESTONES && !isMilestone(marker)) {
+        continue;
+      }
+      
       let prev = record.prev && record.prev.marker;
+
       let blockers = [];
       let message;
       if (prev) {
@@ -808,7 +835,7 @@ class Backtrack {
             let sources = labels.reduce((result, source) => {
               let name = source.names.join("|");
               let leadName = name.split(" ")[0];
-              if (leadName == lastLeadName) {
+              if (COALESCE_LABELS_IN_BLOCKER_LIST && leadName == lastLeadName) {
                 ++leadNameCounter;
                 return result;
               }
@@ -1033,6 +1060,7 @@ class Backtrack {
       case MarkerType.ROOT_END:
       case MarkerType.INPUT_END:
       case MarkerType.LOOP_END:
+      case MarkerType.LABEL_END:
         this.assert(
           trail.type == marker.type - 1,
           "Expected *_BEGIN marker"
@@ -1085,7 +1113,8 @@ class Backtrack {
       switch (marker.type) {
         case MarkerType.ROOT_BEGIN:
           if (marker.rooted) {
-            collector(this, marker, "span");
+            // Uninteresting
+            // collector(this, marker, "span");
             marker = this.prev(marker);
             break;
           } // else fall through
@@ -1108,6 +1137,7 @@ class Backtrack {
           break;
         case MarkerType.ROOT_END:
         case MarkerType.LOOP_END:
+        case MarkerType.LABEL_END:
           // Uninteresting, just skip
           marker = this.backtrail(marker);
           marker = this.prev(marker);
@@ -1121,7 +1151,7 @@ class Backtrack {
           collector(this, marker, "span");
           marker = this.prev(marker);
           break;
-        case MarkerType.LABEL:
+        case MarkerType.LABEL_BEGIN:
           collector(this, marker);
           labels(this, marker);
           if (marker === label) {
