@@ -131,7 +131,8 @@
       content: "Paths are joining here : ";
       font-weight: bold;
     }
-    .marker-type-info {
+    .marker-type-info,
+    .marker-type-milestone {
       padding: 1em 2em;
       margin: 1em 5% !important;
       border-left: 1px solid blue;
@@ -140,6 +141,7 @@
 </head>
 <body>
   <p style="color:red;font-weight: bold">Load ALL *.backtrack files from a backtrack-logs directory together :)</p>
+  <p></p><input type="checkbox" id="only-milestones">Only milestones</input></p>
   <h2 class="half box">Baseline</h2>
   <h2 class="half box">Modified</h2>
   <input class="half" type="file" id="files1" data-bt="0" multiple />

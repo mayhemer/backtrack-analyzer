@@ -49,9 +49,9 @@ const BLOCKER_IN_DIFF_TH = 80;
 const SHOW_BLOCKERS_IN_SINGLE = false;
 const BLOCKER_LISTING_THRESHOLD_MS = 0;
 const DEPENDECY_CLICKABLE_IN_SINGLE = true;
-const SHOW_DEPENDENT_PATH_FROM_EXECUTE_END = false;
+const SHOW_BLOCKER_PATH_FROM_EXECUTE_END = false;
 const COALESCE_LABELS_IN_BLOCKER_LIST = false;
-const SHOW_ONLY_MILESTONES = true;
+let SHOW_ONLY_MILESTONES = false;
 
 const FILE_SLICE = 256 << 10;
 const PREC = 2;
@@ -191,7 +191,11 @@ class Display {
   }
 
   deferMarker(bt, marker, msg = "", short = false) {
-    let element = this.markers[this.gid(marker)];
+    let mod = null;
+    if (Array.prototype.isPrototypeOf(marker)) {
+      mod = marker[1];
+      marker = marker[0];
+    }
 
     let names = marker.names;
     if (!names.length) {
@@ -203,11 +207,18 @@ class Display {
       }
     }
 
+    if (mod) {
+      let informationalNamesMod = mod.names.filter(name => name.match(/^\?\:/));
+      names = names.concat(informationalNamesMod);
+    }
+
+    let element = this.markers[this.gid(marker)];
     if (!element) {
       let thread = bt.threads[marker.tid];
       let process = thread.process;
       element = $("<pre>").text(
         `${MarkerType.$(marker.type)} "${names.join("|")}" @${marker.time.toFixed(PREC)}ms` +
+        (mod ? `|${mod.time.toFixed(PREC)}ms` : "" ) +
         (short ? "" : `\n  ${process.name}/${thread.name}  `) +
         (msg ? `\n${msg}` : "")
       ).addClass(`marker-type-${MarkerType.$(marker.type).toLowerCase()}`);
@@ -254,7 +265,7 @@ class Display {
   }
 };
 
-let display, breadcrumbs;
+let display, breadcrumbs, operation;
 
 // This has meaning only for incomplete (partial, not gracefully closed) profile data
 class PlaceholderMarker {
@@ -273,13 +284,14 @@ class Backtrack {
       dropdownAutoWidth: true,
       width: 'calc(50% - 8px)',
       matcher: (params, data) => {
-        if ($.trim(params.term) === '') {
-          return data;
-        }
-        if (typeof data.text === 'undefined') {
+        if (params.stop) {
           return null;
         }
-        if (params.stop) {
+        if ($.trim(params.term).length < 3) {
+          params.stop = true;
+          return { text: "Type at least 3 chars" };
+        }
+        if (typeof data.text === 'undefined') {
           return null;
         }
         try {
@@ -309,9 +321,7 @@ class Backtrack {
     this.filesSelector = files;
     this.baseline = baseline;
 
-    // There is always only one!
-    let searchField = () => $("input.select2-search__field");
-    this.objectivesSelector.on("change", (event) => {
+    let objectiveHandler = () => {
       display.reset();
       breadcrumbs.reset();
       try {
@@ -339,6 +349,13 @@ class Backtrack {
       } finally {
         display.flush();
       }
+    };
+
+    // There is always only one!
+    let searchField = () => $("input.select2-search__field");
+    this.objectivesSelector.on("change", () => {
+      operation = objectiveHandler;
+      operation();
     }).on("select2:open", () => {
       searchField().prop("placeholder", "Search: REGEXP [SPACE REGEXP...] to list objectives matching ALL the regexp terms");
       setTimeout(function () {
@@ -357,6 +374,40 @@ class Backtrack {
     });
 
     files.trigger("change");
+  }
+
+  isMilestone(marker) {
+    if (!SHOW_ONLY_MILESTONES) {
+      return true;
+    }
+    switch (marker.type) {
+      case MarkerType.OBJECTIVE:
+      case MarkerType.MILESTONE:
+      case MarkerType.INPUT_BEGIN:
+      case MarkerType.LABEL_BEGIN:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  sources(marker) {
+    let labels = [];
+    if (marker.type == MarkerType.LABEL_BEGIN) {
+      // We want labels to have themselves as a source label, but can't do this inside
+      // backtrack() as we would not be able to find the previous label in the loop below.
+      labels.push(marker);
+    }
+    let label = marker.label;
+    while (label && label.marker) {
+      labels.push(label.marker);
+      label = label.marker.label;
+    }
+    return labels;
+  }
+    
+  sourcesDescriptor(marker, det = ">", limit) {
+    return this.sources(marker).slice(0, limit).map(source => source.names.join("|")).join(det);
   }
 
   message(msg) {
@@ -725,28 +776,13 @@ class Backtrack {
     breadcrumbs.push(this.get({ tid, id }), { btid, bid }, indent);
     display.reset();
 
-    let isMilestone = (marker) => {
-      if (!SHOW_ONLY_MILESTONES) {
-        return true;
-      }
-      switch (marker.type) {
-        case MarkerType.OBJECTIVE:
-        case MarkerType.MILESTONE:
-        case MarkerType.INPUT_BEGIN:
-        case MarkerType.LABEL_BEGIN:
-          return true;
-        default:
-          return false;
-      }
-    };
-    
     let records = [];
     let milestone = {};
     this.backtrack(
       tid, id, btid, bid,
       (bt, marker, className = "") => {
         records.push({ marker, className });
-        if (isMilestone(marker)) {
+        if (bt.isMilestone(marker)) {
           milestone.prev = records.last();
           milestone = records.last();
         }
@@ -767,7 +803,7 @@ class Backtrack {
     for (let record of records) {
       let { marker, className } = record;
 
-      if (SHOW_ONLY_MILESTONES && !isMilestone(marker)) {
+      if (!this.isMilestone(marker)) {
         continue;
       }
       
@@ -790,12 +826,18 @@ class Backtrack {
       if (record.dependent) {
         message += `\n  → dependent execution, click to show the triggering path`;
       }
+
       let element = display.deferMarker(this, marker, message);
       if (prev) {
         display.deferTimingBar(marker.time - prev.time);
       }
       if (element.level === undefined) {
         element.level = indent;
+      }
+
+      let sources = this.sourcesDescriptor(marker, "→\n");
+      if (sources) {
+        element.element.prop("title", `source:\n ${sources}`);
       }
 
       if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent) {
@@ -823,6 +865,7 @@ class Backtrack {
           for (let blocker of blockers) {
             let forward = this.forwardtrail(blocker);
             let time = forward.time - blocker.time;
+            // Can't use this.sources() here since we need to backtrack from this point first to cache labels
             let labels = [];
             let source = this.backtrack(blocker.tid, blocker.id, btid, bid, () => { }, () => { }, (bt, label) => {
               labels.push(label);
@@ -852,7 +895,7 @@ class Backtrack {
               `self-time: ${time.toFixed(PREC)}ms\nsource events: ${sources}`
             ).element.addClass("blocker alone clickable").click(() => {
               let forward = this.forwardtrail(blocker);
-              if (!SHOW_DEPENDENT_PATH_FROM_EXECUTE_END || !forward.id) {
+              if (!SHOW_BLOCKER_PATH_FROM_EXECUTE_END || !forward.id) {
                 forward = blocker;
               } else {
                 forward = this.prev(forward);
@@ -872,9 +915,15 @@ class Backtrack {
 
   compareProfiles(tid, id, break_tid, break_id) {
     let collector = function (bt, marker, className) {
-      this.push({ marker, desc: bt.descriptor(marker), className });
+      if (!bt.isMilestone(marker)) {
+        return;
+      }
+      this.push({ marker, className });
     };
     let trailCollector = function (bt, trail, marker) {
+      if (!bt.isMilestone(marker)) {
+        return;
+      }
       bt.assert(this.last().marker === marker);
       this.last().trail = trail;
       this.last().dependent = marker.rooted;
@@ -886,6 +935,14 @@ class Backtrack {
 
     let modifiedPath = [];
     this.backtrack(tid, id, break_tid, break_id, collector.bind(modifiedPath), trailCollector.bind(modifiedPath));
+
+    // must be done after calling backtrack(), because only now all labels are correctly set on markers
+    for (let marker of baselinePath) {
+      marker.desc = this.baseline.descriptor(marker.marker);
+    }
+    for (let marker of modifiedPath) {
+      marker.desc = this.descriptor(marker.marker);
+    }
 
     let total_baseline = baselinePath[0].marker.time - baselinePath.last().marker.time;
     let total_modified = modifiedPath[0].marker.time - modifiedPath.last().marker.time;
@@ -918,13 +975,14 @@ class Backtrack {
         let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
         let base_delay_eq = 0;
         let mod_delay_eq = 0;
+        let sourcesL = this.sourcesDescriptor(base.marker, "→\n");
+        let sourcesR = this.sourcesDescriptor(mod.marker, "→\n");
 
-        display.deferMarker(this.baseline, base.marker,
+        display.deferMarker(this.baseline, [base.marker, mod.marker],
           `base: +${base_delay.toFixed(PREC)}ms, modified: +${mod_delay.toFixed(PREC)}ms, difference: ${(mod_delay - base_delay).toFixed(PREC)}ms` +
           `${base.dependent ? "\nbaseline is dependent execution" : ""}`+
           `${mod.dependent ? "\nmodified is dependent execution" : ""}`
-        ).element.addClass("equal cmp").addClass(base.className);
-        display.deferDiffTimingBar(base_delay, mod_delay);
+        ).element.addClass("equal cmp").addClass(base.className).prop("title", `source baseline:\n ${sourcesL}\n\nsources mod:\n${sourcesR}`);
 
         if (equal_prev) {
           // Calc the times to the next point where paths meet each other again.
@@ -932,10 +990,12 @@ class Backtrack {
           mod_delay_eq = mod.marker.time - equal_prev.mod.marker.time;
           display.defer({
             element: $("<pre>").addClass("equal cmp").text(
-              `\ndifference to the next equal point: ${(mod_delay_eq - base_delay_eq).toFixed(PREC)}ms`
+              `\nto the next equal point, base: ${base_delay_eq.toFixed(PREC)}ms, modified: ${mod_delay_eq.toFixed(PREC)}ms, difference: ${(mod_delay_eq - base_delay_eq).toFixed(PREC)}ms`
             )
           });
           display.deferDiffTimingBar(base_delay_eq, mod_delay_eq);
+        } else {
+          display.deferDiffTimingBar(base_delay, mod_delay);
         }
 
         if (base.trail) {
@@ -968,7 +1028,7 @@ class Backtrack {
                     let mod_time = mod.end.time - mod.begin.time;
                     let diff = mod_time - base_time;
 
-                    sub.deferMarker(this.baseline, blocker.base.marker,
+                    sub.deferMarker(this.baseline, [blocker.base.marker, blocker.mod.marker],
                       `self-time baseline: ${base_time.toFixed(PREC)}ms, modified: ${mod_time.toFixed(PREC)}ms, difference: ${diff.toFixed(PREC)}ms`, true
                     ).element.addClass("blocker equal");
                     sub.deferDiffTimingBar(base_time, mod_time);
@@ -1003,12 +1063,14 @@ class Backtrack {
         }
       } else if (base) {
         let base_delay = base_prev ? base.marker.time - base_prev.marker.time : 0;
+        let sources = this.sourcesDescriptor(base.marker, "→\n");
         display.deferMarker(this.baseline, base.marker, `base: +${base_delay.toFixed(PREC)}ms`)
-          .element.addClass("base cmp").addClass(base.className);
+          .element.addClass("base cmp").addClass(base.className).prop("title", `source:\n ${sources}`);
       } else if (mod) {
         let mod_delay = mod_prev ? mod.marker.time - mod_prev.marker.time : 0;
+        let sources = this.sourcesDescriptor(mod.marker, "→\n");
         display.deferMarker(this, mod.marker, `modified: +${mod_delay.toFixed(PREC)}ms`)
-          .element.addClass("mod cmp").addClass(mod.className);
+          .element.addClass("mod cmp").addClass(mod.className).prop("title", `source:\n ${sources}`);
       } else {
         this.assert(false, "No .baseline or .modified on an LCS result");
       }
@@ -1029,7 +1091,8 @@ class Backtrack {
     let thread = this.threads[marker.tid];
     let process = thread.process;
     let threadName = thread.name.split('#')[0];
-    return `${marker.type}@${marker.names.join("|")}@${process.type}@${threadName}`;
+    let sources = this.sourcesDescriptor(marker, ">", 1);
+    return `${marker.type}@${marker.names.filter(name => !name.match(/^\?\:/)).join("|")}@${process.type}@${threadName}@@${sources}`;
   }
 
   get(gid) {
@@ -1108,19 +1171,26 @@ class Backtrack {
 
   backtrack(tid, id, break_tid, break_id, collector, blocker_trail = () => { }, labels = () => { }) {
     let marker = this.get({ tid, id });
-    let label = this.get({ tid: break_tid, id: break_id });
+    let stop = this.get({ tid: break_tid, id: break_id });
+
+    let lazyLabel = { marker: null };
+    let collect = (marker, className) => {
+      marker.label = lazyLabel;
+      collector(this, marker, className);
+    }
+
     while (marker) {
       switch (marker.type) {
         case MarkerType.ROOT_BEGIN:
           if (marker.rooted) {
             // Uninteresting
-            // collector(this, marker, "span");
+            // collect(marker, "span");
             marker = this.prev(marker);
             break;
           } // else fall through
         case MarkerType.INPUT_BEGIN:
         case MarkerType.STARTUP:
-          collector(this, marker);
+          collect(marker);
           return marker;
         case MarkerType.DISPATCH:
         case MarkerType.REQUEST:
@@ -1129,10 +1199,10 @@ class Backtrack {
         case MarkerType.REDISPATCH_BEGIN:
         case MarkerType.EXECUTE_BEGIN:
         case MarkerType.RESPONSE_BEGIN:
-          collector(this, marker);
+          collect(marker);
           let trail = this.backtrail(marker);
           blocker_trail(this, trail, marker);
-          collector(this, trail);
+          collect(trail);
           marker = this.prev(trail);
           break;
         case MarkerType.ROOT_END:
@@ -1146,21 +1216,23 @@ class Backtrack {
         case MarkerType.EXECUTE_END:
         case MarkerType.RESPONSE_END:
         case MarkerType.INPUT_END:
-          collector(this, marker, "span");
+          collect(marker, "span");
           marker = this.backtrail(marker);
-          collector(this, marker, "span");
+          collect(marker, "span");
           marker = this.prev(marker);
           break;
         case MarkerType.LABEL_BEGIN:
-          collector(this, marker);
+          lazyLabel.marker = marker;
+          lazyLabel = {};
+          collect(marker);
           labels(this, marker);
-          if (marker === label) {
+          if (marker === stop) {
             return marker;
           }
           marker = this.prev(marker);
           break;
         default:
-          collector(this, marker);
+          collect(marker);
           marker = this.prev(marker);
           break;
       }
@@ -1176,6 +1248,11 @@ $(() => {
 
   $("#files2").prop("disabled", true);
   $("#objectives2").prop("disabled", true);
+
+  $("#only-milestones").on("change", (event) => {
+    SHOW_ONLY_MILESTONES = $(event.target).is(":checked");
+    operation && operation();
+  }).trigger("change");
 
   let timeline = $("#timeline").css({ "height": "50%", });
   display = new Display(timeline);
