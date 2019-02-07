@@ -800,12 +800,23 @@ class Backtrack {
       }
     );
 
+    let lastInfo = false;
+
     for (let record of records) {
       let { marker, className } = record;
 
       if (!this.isMilestone(marker)) {
         continue;
       }
+
+      let isInfo = marker.type == MarkerType.INFO;
+      if (isInfo && marker.names.join("|") == lastInfo) {
+        continue;
+      } else if (lastInfo) {
+        let element = $("<div>").addClass("full-width marker-type-info").text("... multiple times");
+        display.defer({ element });
+      }
+      lastInfo = isInfo ? marker.names.join("|") : false;
       
       let prev = record.prev && record.prev.marker;
 
