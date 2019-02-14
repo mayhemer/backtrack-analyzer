@@ -800,7 +800,7 @@ class Backtrack {
       }
     );
 
-    let lastInfo = false;
+    let firstInfo = null;
 
     for (let record of records) {
       let { marker, className } = record;
@@ -810,13 +810,17 @@ class Backtrack {
       }
 
       let isInfo = marker.type == MarkerType.INFO;
-      if (isInfo && marker.names.join("|") == lastInfo) {
+      if (isInfo && marker.names.join("|") === (firstInfo && firstInfo.names.join("|"))) {
         continue;
-      } else if (lastInfo) {
-        let element = $("<div>").addClass("full-width marker-type-info").text("... multiple times");
-        display.defer({ element });
       }
-      lastInfo = isInfo ? marker.names.join("|") : false;
+      
+      if (firstInfo) {
+        let element = $("<div>").addClass("full-width marker-type-info")
+          .text(`... multiple times, additional delay: ${(firstInfo.time - marker.time).toFixed(PREC)}ms`);
+        display.defer({ element });
+        display.deferTimingBar(firstInfo.time - marker.time);
+      }
+      firstInfo = isInfo ? marker : null;
       
       let prev = record.prev && record.prev.marker;
 
