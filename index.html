@@ -64,10 +64,17 @@
       background-color: darkred;
       margin: 0;
     }
+    pre {
+      margin: 0.25em;
+      margin-left: 0.25em;
+    }
 
     /* these are only for individual lines of output */
     .bold {
       font-weight: bold;
+    }
+    .gray {
+      color: gray;
     }
     .equal {
       text-align: center;
@@ -81,8 +88,8 @@
       color: brown;
     }
     div.blocker-container {
-      padding: 1em 2em;
-      margin: 1em 5%;
+      padding: 0 2em;
+      margin: .25em 5% 1em;
       border-left: 1px solid red;
     }
     .blocker {
@@ -133,8 +140,8 @@
     }
     .marker-type-info,
     .marker-type-milestone {
-      padding: 1em 2em;
-      margin: 1em 5% !important;
+      padding: 0 2em;
+      margin: .25em 5% !important;
       border-left: 1px solid blue;
     }
   </style>
@@ -144,7 +151,10 @@
     Load ALL *.backtrack files from a backtrack-logs-* directory together :)<br/>
     Works only with Backtrack patch wip13+
   </p>
-  <p></p><input type="checkbox" id="only-milestones">Only milestones</input></p>
+  <p>
+    <input type="checkbox" id="only-milestones">Only milestones</input>
+    <input type="checkbox" id="omit-nested">Omit nested blocks</input>
+  </p>
   <h2 class="half box">Baseline</h2>
   <h2 class="half box">Modified</h2>
   <input class="half" type="file" id="files1" data-bt="0" multiple />
