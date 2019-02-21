@@ -425,6 +425,7 @@ class Backtrack {
   consumeFiles() {
     performance.mark("consume-all-begin");
 
+    operation = null;
     display.reset();
     if (breadcrumbs) {
       breadcrumbs.reset();
