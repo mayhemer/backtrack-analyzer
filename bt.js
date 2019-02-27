@@ -60,6 +60,26 @@ let OMIT_NESTED_BLOCKS = false;
 const FILE_SLICE = 256 << 10;
 const PREC = 2;
 
+function exposeDownload(data, fileName, filter) {
+  let json = JSON.stringify(data, filter);
+  let blob = new Blob([json], { type: "octet/stream" });
+  let url = window.URL.createObjectURL(blob);
+
+  let a = document.getElementById("download-path");
+  if (a.href) {
+    window.URL.revokeObjectURL(a.href);
+  }
+  a.href = url;
+  a.download = fileName;
+}
+
+function _may_fail(f) {
+  try {
+    f();
+  } catch (ex) {
+  }
+}
+
 function ensure(array, itemName, def = {}) {
   if (!(itemName in array)) {
     array[itemName] = (typeof def === "function") ? def() : def;
@@ -207,7 +227,7 @@ class Display {
       switch (marker.type) {
         case MarkerType.EXECUTE_BEGIN:
         case MarkerType.RESPONSE_BEGIN:
-          names = bt.get(marker.backtrail).names;
+          _may_fail(() => names = bt.get(marker.backtrail).names);
       }
     }
 
@@ -446,6 +466,11 @@ class Backtrack {
     }
 
     this.message(`Loading...`);
+
+    if (this.files[0].name.match(/\.btpath$/)) {
+      this.recordedBaselineProfileFromBlob(this.files[0]);
+      return;
+    }
 
     let files = [];
     for (let file of this.files) {
@@ -796,7 +821,8 @@ class Backtrack {
   }
 
   baselineProfile(tid, id, btid, bid, indent = 0) {
-    breadcrumbs.push(this.get({ tid, id }), { btid, bid }, indent);
+    let objective = this.get({ tid, id });
+    breadcrumbs.push(objective, { btid, bid }, indent);
     display.reset();
 
     let records = [];
@@ -810,7 +836,7 @@ class Backtrack {
           milestone = records.last();
         }
       },
-      (bt, trail, marker) => { 
+      (bt, trail, marker) => {
         let last = records.last();
         bt.assert(last.marker === marker);
 
@@ -823,6 +849,75 @@ class Backtrack {
       }
     );
 
+    this.baselineProfileInternal(records, btid, bid, indent);
+
+    let filename = objective.names.join("_");
+    let threads = {};
+    for (let threadid in this.threads) {
+      let thread = this.threads[threadid];
+      threads[threadid] ={
+        process: thread.process,
+        tid: thread.tid
+      };
+    }
+    exposeDownload(
+      { records, threads, objective },
+      `${filename}@${objective.time.toFixed(PREC)}.btpath`,
+      // We must remove the "prev" property on records, as those are
+      // hugely enlarging the saved json and can be easily reconstructed.
+      (key, val) => (key === "prev") ? undefined : val
+    );
+  }
+
+  recordedBaselineProfileFromURI(URI) {
+    fetch(URI, { mode: 'cors', credentials: 'omit', }).then(function (response) {
+      return response.blob();
+    }).then(function (blob) {
+      this.recordedBaselineProfileFromBlob(blob);
+    }.bind(this)).catch((reason) => {
+      this.message(reason);
+    });
+  }
+
+  recordedBaselineProfileFromBlob(blob) {
+    let reader = new FileReader();
+    reader.onloadend = (event) => {
+      if (event.target.readyState == FileReader.DONE && event.target.result) {
+        let pathJSON = event.target.result;
+        this.recordedBaselineProfileInternal(pathJSON);
+      }
+    };
+    reader.onerror = () => {
+      console.error(`Error while reading stored path`);
+      console.exception(reader.error);
+      this.message(reader.error);
+    };
+    reader.readAsBinaryString(blob);
+  }
+
+  recordedBaselineProfileInternal(json) {
+    let path = JSON.parse(json);
+    let { objective, threads, records } = path;
+
+    // The "prev" reference is omitted to save space in the saved path.
+    // Reconstruct it here.
+    let prev = {};
+    for (let record of records) {
+      prev.prev = record;
+      prev = record;
+    }
+
+    this.threads = threads;
+
+    display.reset();
+    breadcrumbs.reset();
+    this.baselineProfileInternal(records, 0, 0, 0, true);
+    display.flush();
+
+    this.message(objective.names.join("|"));
+  }
+
+  baselineProfileInternal(records, btid, bid, indent = 0, nosubtracking = false) {
     let firstInfo = null;
 
     for (let record of records) {
@@ -857,6 +952,9 @@ class Backtrack {
         if (record.blockers && record.blockers.length) {
           message += `, blocker count: ${record.blockers.length}`;
           blockers = record.blockers.filter(blocker => {
+            if (nosubtracking || !BLOCKER_LISTING_THRESHOLD_MS) {
+              return true;
+            }
             let edge = Math.min(this.forwardtrail(blocker).time, marker.time);
             let time = edge - blocker.time;
             return time > BLOCKER_LISTING_THRESHOLD_MS;
@@ -865,7 +963,7 @@ class Backtrack {
       }
 
       if (record.dependent) {
-        message += `\n  → dependent execution, click to show the triggering path`;
+        message += `\n  → dependent execution${nosubtracking ? `` : `, click to show the triggering path`}`;
       }
 
       let element = display.deferMarker(this, marker, message);
@@ -881,7 +979,7 @@ class Backtrack {
         element.element.prop("title", `source:\n ${sources}`);
       }
 
-      if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent) {
+      if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent && !nosubtracking) {
         element.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
           this.baselineProfile(marker.tid, marker.id, btid, bid, indent /* + 10*/);
@@ -906,7 +1004,7 @@ class Backtrack {
 
       element.element.addClass(className).css({ "margin-left": indent + "%" })
 
-      if (blockers.length) {
+      if (blockers.length && !nosubtracking) {
         let sub = display.sub($("<div>").addClass("blocker-container"), record.marker);
         sub.defer({ element: $("<span>").text(`click to show blockers`).addClass("clickable gray").click((e) => {
           for (let blocker of blockers) {
@@ -1314,4 +1412,10 @@ $(() => {
   baseline.modified = modified;
 
   breadcrumbs = new Breadcrumb($("#breadcrumbs"), baseline);
+
+  console.log(location);
+  let URL = location.search.substring(1);
+  if (URL) {
+    baseline.recordedBaselineProfileFromURI(URL);
+  }
 });
