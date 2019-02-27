@@ -252,11 +252,16 @@ class Display {
   }
 
   deferTimingBar(time) {
-    time = Math.floor(time) / 10 * 5;
+    let factor = Math.floor(time) / 10 * 5;
     let element = $("<div>").addClass("full-width");
+    let width = Math.min(100, Math.max(0, Math.abs(factor)));
+    if (width < 1) {
+      return null;
+    }
     element.append($("<div>")
       .addClass("diff-progress single")
-      .css("width", `${Math.min(100, Math.max(0, Math.abs(time)))}%`)
+      .css("width", `${width}%`)
+      .prop("title", `Delay: ${time.toFixed(PREC)}ms`)
     );
     return this.defer({ element });
   }
