@@ -434,6 +434,7 @@ class Backtrack {
     this.objectives = [];
     this.processes = {};
     this.threads = {};
+    this.startupmarkers = [];
 
     if (this.files.length == 0) {
       return;
@@ -541,9 +542,12 @@ class Backtrack {
     }
 
     this.info = { CPUS: 1 };
-    if (this.startupmarker) {
-      let info = this.startupmarker.names.join(" ");
+    for (let startup of this.startupmarkers) {
+      let info = startup.names.join(" ");
       this.info.CPUS = (cpus => cpus ? cpus[1] : 1)(info.match(/CPUS=(\d+)/));
+
+      // Whipe the name so it doesn't cause any confusions.
+      startup.names = [];
     }
 
     console.log(this.info);
@@ -695,7 +699,7 @@ class Backtrack {
             type,
             time: this.parseTime(match[1]),
           });
-          this.startupmarker = thread.last;
+          this.startupmarkers.push(thread.last);
           break;
         case MarkerType.INFO:
           thread.addmarker(id, {
