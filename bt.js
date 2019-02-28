@@ -898,7 +898,8 @@ class Backtrack {
       // * We must remove the "prev" property on records, as those are
       // hugely enlarging the saved json and can be easily reconstructed.
       // * The dependent property (which is the marker to track dep from)
-      // is serialized as well
+      // is serialized as well, but only one level (this replacer API
+      // doesn't allow counting easily.)
       (key, val) => {
         if (key === "prev") {
           return undefined;
