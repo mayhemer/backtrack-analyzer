@@ -161,7 +161,7 @@ class Breadcrumb {
 
   rebuild() {
     this.target.empty();
-    for (let { marker, label, indent, scroll } of this.history) {
+    for (let { marker, revert, scroll } of this.history) {
       this.target.append(" &gt; ");
       this.target.append($("<span>").text(
         `${MarkerType.$(marker.type)} "${marker.names.join("|").split(" ")[0]}"`
@@ -170,18 +170,22 @@ class Breadcrumb {
         this.history = this.history.filter((bc) => {
           return !(drop || (drop = bc.marker === marker));
         });
-        this.bt.baselineProfile(marker.tid, marker.id, label.tid, label.id, indent);
+        revert();
         display.flush();
         $(window).scrollTop(scroll);
       }));
     }
   }
 
-  push(marker, label, indent) {
+  push(marker, revert) {
     if (this.history.length) {
       this.history.last().scroll = $(window).scrollTop();
     }
-    this.history.push({ marker, label, indent, scroll: 0 });
+    this.history.push({
+      marker,
+      revert,
+      scroll: 0
+    });
     this.rebuild();
   }
 }
@@ -196,6 +200,8 @@ class Display {
     this.defered = [];
     this.markers = {};
     this.timeline.empty();
+    this.nextNonInfo = 1;
+    location.hash = "";
     $(window).scrollTop(0);
   }
 
@@ -248,6 +254,14 @@ class Display {
           (msg ? `\n${msg}` : "");
       }
       element = $("<pre>").text(text).addClass(`marker-type-${MarkerType.$(marker.type).toLowerCase()}`);
+      if (marker.type == MarkerType.INFO) {
+        let nextNonInfo = this.nextNonInfo;
+        element.addClass("clickable").click(() => {
+          location.hash = `ref-${nextNonInfo}`;
+        });
+      } else {
+        element.prop("id", `ref-${this.nextNonInfo++}`);
+      }
 
       element = { element, marker };
       this.defer(element);
@@ -398,13 +412,13 @@ class Backtrack {
     }).on('select2:closing', function() {
       localStorage["search-field"] = searchField().prop('value');
     });
-    
+
     files.on("change", (event) => {
       this.files = Array.from(event.target.files);
       this.consumeFiles();
     });
 
-    files.trigger("change");
+    setTimeout(() => files.trigger("change"), 0);
   }
 
   isMilestone(marker) {
@@ -436,7 +450,7 @@ class Backtrack {
     }
     return labels;
   }
-    
+
   sourcesDescriptor(marker, det = ">", limit) {
     return this.sources(marker).slice(0, limit).map(source => source.names.join("|")).join(det);
   }
@@ -600,7 +614,7 @@ class Backtrack {
 
   processLine(line, process) {
     let fullLine = line;
-    
+
     let match = line.match(/^([^:]+):([^:]+):(.*)$/);
     if (!match) {
       return;
@@ -608,14 +622,14 @@ class Backtrack {
 
     let tid = parseInt(match[1]);
     let id = match[2];
-    
+
     if (isNaN(tid)) {
       if (this.last_name_amend) {
         this.last_name_amend.names.push(line.trim());
       }
       return;
-    }    
-      
+    }
+
     this.last_name_amend = undefined;
 
     line = match[3];
@@ -820,35 +834,52 @@ class Backtrack {
     this.objectivesSelector.val(`0:0:0:0`);
   }
 
-  baselineProfile(tid, id, btid, bid, indent = 0) {
-    let objective = this.get({ tid, id });
-    breadcrumbs.push(objective, { btid, bid }, indent);
-    display.reset();
-
+  collectBacktrackRecords(tid, id, btid, bid, depTracking = true, limit = 1000000) {
     let records = [];
     let milestone = {};
-    this.backtrack(
-      tid, id, btid, bid,
-      (bt, marker, className = "") => {
-        records.push({ marker, className });
-        if (bt.isMilestone(marker)) {
-          milestone.prev = records.last();
-          milestone = records.last();
+    try {
+      this.backtrack(
+        tid, id, btid, bid,
+        (bt, marker, className = "") => {
+          if (records.length == limit) {
+            throw "STOP";
+          }
+
+          records.push({ marker, className });
+          if (bt.isMilestone(marker)) {
+            milestone.prev = records.last();
+            milestone = records.last();
+          }
+        },
+        (bt, trail, marker) => {
+          let last = records.last();
+          bt.assert(last.marker === marker);
+
+          last.trail = trail;
+          last.dependent = marker.rooted ? (depTracking ? this.prev(marker) : true) : false;
+          last.blockers = [];
+          bt.blockers(trail, marker, (bt, blocker) => {
+            last.blockers.push(blocker);
+          });
         }
-      },
-      (bt, trail, marker) => {
-        let last = records.last();
-        bt.assert(last.marker === marker);
-
-        last.trail = trail;
-        last.dependent = marker.rooted;
-        last.blockers = [];
-        bt.blockers(trail, marker, (bt, blocker) => {
-          last.blockers.push(blocker);
-        });
+      );
+    } catch (ex) {
+      if (ex !== "STOP") {
+        throw ex;
       }
-    );
+    }
 
+    return records;
+  }
+
+  baselineProfile(tid, id, btid, bid, indent = 0) {
+    let objective = this.get({ tid, id });
+    breadcrumbs.push(objective, () => {
+      this.baselineProfile(tid, id, btid, bid, indent);
+    });
+    display.reset();
+
+    let records = this.collectBacktrackRecords(tid, id, btid, bid);
     this.baselineProfileInternal(records, btid, bid, indent);
 
     let filename = objective.names.join("_");
@@ -860,12 +891,32 @@ class Backtrack {
         tid: thread.tid
       };
     }
+
     exposeDownload(
       { records, threads, objective },
       `${filename}@${objective.time.toFixed(PREC)}.btpath`,
-      // We must remove the "prev" property on records, as those are
+      // * We must remove the "prev" property on records, as those are
       // hugely enlarging the saved json and can be easily reconstructed.
-      (key, val) => (key === "prev") ? undefined : val
+      // * The dependent property (which is the marker to track dep from)
+      // is serialized as well
+      (key, val) => {
+        if (key === "prev") {
+          return undefined;
+        }
+        if (key === "dependent") {
+          if (!val) {
+            return val;
+          }
+          if (val === true) {
+            return val;
+          }
+          let dependent = this.collectBacktrackRecords(val.tid, val.id, btid, bid, false, 2000);
+          console.log(`storing dep of ${val}`);
+          console.log(dependent);
+          return dependent;
+        }
+        return val;
+      }
     );
   }
 
@@ -880,11 +931,13 @@ class Backtrack {
   }
 
   recordedBaselineProfileFromBlob(blob) {
+    breadcrumbs.reset();
+
     let reader = new FileReader();
     reader.onloadend = (event) => {
       if (event.target.readyState == FileReader.DONE && event.target.result) {
         let pathJSON = event.target.result;
-        this.recordedBaselineProfileInternal(pathJSON);
+        this.recordedBaselineProfileFromJSONString(pathJSON);
       }
     };
     reader.onerror = () => {
@@ -895,29 +948,40 @@ class Backtrack {
     reader.readAsBinaryString(blob);
   }
 
-  recordedBaselineProfileInternal(json) {
+  recordedBaselineProfileFromJSONString(json) {
     let path = JSON.parse(json);
     let { objective, threads, records } = path;
-
     // The "prev" reference is omitted to save space in the saved path.
     // Reconstruct it here.
-    let prev = {};
-    for (let record of records) {
-      prev.prev = record;
-      prev = record;
+    let reconstruct = (records) => {
+      let prev = {};
+      for (let record of records) {
+        prev.prev = record;
+        prev = record;
+        if (record.dependent && record.dependent !== true) {
+          reconstruct(record.dependent);
+        }
+      }
     }
+    reconstruct(records);
 
     this.threads = threads;
+    this.recordedBaselineProfile(objective, records);
+    display.flush();
+  }
+
+  recordedBaselineProfile(objective, records) {
+    breadcrumbs.push(records[0].marker, () => {
+      this.recordedBaselineProfile(objective, records);
+    });
 
     display.reset();
-    breadcrumbs.reset();
     this.baselineProfileInternal(records, 0, 0, 0, true);
     display.flush();
-
     this.message(objective.names.join("|"));
   }
 
-  baselineProfileInternal(records, btid, bid, indent = 0, nosubtracking = false) {
+  baselineProfileInternal(records, btid, bid, indent = 0, pathOnly = false) {
     let firstInfo = null;
 
     for (let record of records) {
@@ -933,7 +997,7 @@ class Backtrack {
         if (isInfo && marker.names.join("|") === (firstInfo && firstInfo.names.join("|"))) {
           continue;
         }
-        
+
         if (firstInfo) {
           let element = $("<div>").addClass("full-width marker-type-info")
             .text(`... multiple times, additional delay: ${(firstInfo.time - marker.time).toFixed(PREC)}ms`);
@@ -942,7 +1006,7 @@ class Backtrack {
         }
         firstInfo = isInfo ? marker : null;
       }
-      
+
       let prev = record.prev && record.prev.marker;
 
       let blockers = [];
@@ -952,7 +1016,7 @@ class Backtrack {
         if (record.blockers && record.blockers.length) {
           message += `, blocker count: ${record.blockers.length}`;
           blockers = record.blockers.filter(blocker => {
-            if (nosubtracking || !BLOCKER_LISTING_THRESHOLD_MS) {
+            if (pathOnly || !BLOCKER_LISTING_THRESHOLD_MS) {
               return true;
             }
             let edge = Math.min(this.forwardtrail(blocker).time, marker.time);
@@ -963,7 +1027,7 @@ class Backtrack {
       }
 
       if (record.dependent) {
-        message += `\n  → dependent execution${nosubtracking ? `` : `, click to show the triggering path`}`;
+        message += `\n  → dependent execution${record.dependent === true ? `, but no data to track back` : `, click to show the triggering path`}`;
       }
 
       let element = display.deferMarker(this, marker, message);
@@ -979,12 +1043,19 @@ class Backtrack {
         element.element.prop("title", `source:\n ${sources}`);
       }
 
-      if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent && !nosubtracking) {
-        element.element.addClass("clickable").on("click", () => {
-          let marker = this.prev(record.marker);
-          this.baselineProfile(marker.tid, marker.id, btid, bid, indent /* + 10*/);
-          display.flush();
-        });
+      if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent) {
+        if (pathOnly && record.dependent !== true) {
+          element.element.addClass("clickable").on("click", () => {
+            this.recordedBaselineProfile(record.dependent[0].marker, record.dependent);
+            display.flush();
+          });
+        } else {
+          element.element.addClass("clickable").on("click", () => {
+            let marker = this.prev(record.marker);
+            this.baselineProfile(marker.tid, marker.id, btid, bid, indent /* + 10*/);
+            display.flush();
+          });
+        }
       }
 
       if (record.className == "span" && record.marker.type == MarkerType.EXECUTE_END) {
@@ -1004,7 +1075,7 @@ class Backtrack {
 
       element.element.addClass(className).css({ "margin-left": indent + "%" })
 
-      if (blockers.length && !nosubtracking) {
+      if (blockers.length && !pathOnly) {
         let sub = display.sub($("<div>").addClass("blocker-container"), record.marker);
         sub.defer({ element: $("<span>").text(`click to show blockers`).addClass("clickable gray").click((e) => {
           for (let blocker of blockers) {

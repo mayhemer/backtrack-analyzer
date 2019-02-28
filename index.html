@@ -144,6 +144,9 @@
       margin: .25em 5% !important;
       border-left: 1px solid blue;
     }
+    .marker-type-info.clickable {
+      cursor: copy;
+    }
   </style>
 </head>
 <body>
@@ -153,7 +156,9 @@
   </p>
   <p>
     <input type="checkbox" id="only-milestones">Only milestones</input>
+    |
     <input type="checkbox" id="omit-nested">Omit nested blocks</input>
+    |
     <a id="download-path">Download path</a>
   </p>
   <h2 class="half box">Baseline</h2>
