@@ -860,6 +860,8 @@ class Backtrack {
           last.blockers = [];
           bt.blockers(trail, marker, (bt, blocker) => {
             last.blockers.push(blocker);
+            let forward = bt.forwardtrail(blocker);
+            blocker.duration = forward.time - blocker.time;
           });
         }
       );
@@ -1076,18 +1078,18 @@ class Backtrack {
 
       element.element.addClass(className).css({ "margin-left": indent + "%" })
 
-      if (blockers.length && !pathOnly) {
+      if (blockers.length) {
         let sub = display.sub($("<div>").addClass("blocker-container"), record.marker);
         sub.defer({ element: $("<span>").text(`click to show blockers`).addClass("clickable gray").click((e) => {
           for (let blocker of blockers) {
-            let forward = this.forwardtrail(blocker);
-            let time = forward.time - blocker.time;
             // Can't use this.sources() here since we need to backtrack from this point first to cache labels
             let labels = [];
-            let source = this.backtrack(blocker.tid, blocker.id, btid, bid, () => { }, () => { }, (bt, label) => {
-              labels.push(label);
-            });
-            labels.push(source);
+            if (!pathOnly) {
+              let source = this.backtrack(blocker.tid, blocker.id, btid, bid, () => { }, () => { }, (bt, label) => {
+                labels.push(label);
+              });
+              labels.push(source);
+            }
 
             let lastSource;
             let lastLeadName = "";
@@ -1108,19 +1110,23 @@ class Backtrack {
               return result + `\n• ${MarkerType.$(source.type)} "${name}" @${source.time.toFixed(PREC)}ms`;
             }, "");
 
-            sub.deferMarker(this, blocker,
-              `self-time: ${time.toFixed(PREC)}ms\nsource events: ${sources}`
-            ).element.addClass("blocker alone clickable").click(() => {
-              let forward = this.forwardtrail(blocker);
-              if (!SHOW_BLOCKER_PATH_FROM_EXECUTE_END || !forward.id) {
-                forward = blocker;
-              } else {
-                forward = this.prev(forward);
-              }
-              this.baselineProfile(forward.tid, forward.id, btid, bid, indent /* + 10*/);
-              display.flush();
-            });
-            sub.deferTimingBar(time);
+            let { element } = sub.deferMarker(this, blocker,
+              `self-time: ${blocker.duration.toFixed(PREC)}ms\nsource events: ${sources}`
+            );
+            element.addClass("blocker alone");
+            if (!pathOnly) {
+              element.addClass("clickable").click(() => {
+                let forward = this.forwardtrail(blocker);
+                if (!SHOW_BLOCKER_PATH_FROM_EXECUTE_END || !forward.id) {
+                  forward = blocker;
+                } else {
+                  forward = this.prev(forward);
+                }
+                this.baselineProfile(forward.tid, forward.id, btid, bid, indent /* + 10*/);
+                display.flush();
+              });
+            }
+            sub.deferTimingBar(blocker.duration);
            } // for blockers
           sub.flush();
           $(e.target).off("click").removeClass("clickable");
