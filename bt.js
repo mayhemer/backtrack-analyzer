@@ -834,7 +834,7 @@ class Backtrack {
     this.objectivesSelector.val(`0:0:0:0`);
   }
 
-  collectBacktrackRecords(tid, id, btid, bid, depTracking = true, limit = 1000000) {
+  collectBacktrackRecords(tid, id, btid, bid, depTracking = true, limit = 100000) {
     let records = [];
     let milestone = {};
     try {
@@ -901,22 +901,13 @@ class Backtrack {
       // hugely enlarging the saved json and can be easily reconstructed.
       // * The dependent property (which is the marker to track dep from)
       // is serialized as well, but only one level (this replacer API
-      // doesn't allow counting easily.)
+      // doesn't allow nesting control easily.)
       (key, val) => {
         if (key === "prev") {
           return undefined;
         }
-        if (key === "dependent") {
-          if (!val) {
-            return val;
-          }
-          if (val === true) {
-            return val;
-          }
-          let dependent = this.collectBacktrackRecords(val.tid, val.id, btid, bid, false, 2000);
-          console.log(`storing dep of ${val}`);
-          console.log(dependent);
-          return dependent;
+        if (key === "dependent" && val.id) {
+          return this.collectBacktrackRecords(val.tid, val.id, btid, bid, false, 2000);
         }
         return val;
       }
@@ -1388,6 +1379,8 @@ class Backtrack {
         collector(this, execute_begin);
       }
 
+      this.assert(pexec_gid.id !== execute_begin.pexec_gid.id || pexec_gid.tid !== execute_begin.pexec_gid.tid,
+        `prev-exec loop to itself: gid_t = ${pexec_gid.tid}:${pexec_gid.id}`);
       pexec_gid = execute_begin.pexec_gid;
     }
   }
