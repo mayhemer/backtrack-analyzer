@@ -849,6 +849,17 @@ class Backtrack {
   }) {
     let records = [];
     let milestone = {};
+
+    // *_BEGIN may be hit as nested, so there can be a different way of walking
+    // them.  Rather ignore hit to not break the different path follow.
+    let ignroreHit = new Set([
+      MarkerType.ROOT_BEGIN,
+      MarkerType.REDISPATCH_BEGIN,
+      MarkerType.RESPONSE_BEGIN,
+      MarkerType.EXECUTE_BEGIN,
+      MarkerType.INPUT_BEGIN,
+    ]);
+
     this.backtrack(
       tid, id, btid, bid,
       (bt, marker, className = "") => {
@@ -859,13 +870,7 @@ class Backtrack {
         }
 
         let overlimit = records.length >= options.limit;
-        // EXECUTE_BEGIN and RESPONSE_BEGIN may be hit as nested, so there can be a different way of
-        // walking them.  Rather ignore hit to not break the different path follow.
-        let alreadyhit =
-          (marker.type != 9) &&
-          (marker.type != 12) &&
-          marker.hit.has(options.colorCookie);
-        if (alreadyhit) console.log(`${marker.names.join("")} - ${marker.type}, already hit`);
+        let alreadyhit = marker.hit.has(options.colorCookie) && !ignroreHit.has(marker.type);
 
         return !overlimit && !alreadyhit;
       },
