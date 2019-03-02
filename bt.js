@@ -53,6 +53,7 @@ const SHOW_BLOCKER_PATH_FROM_EXECUTE_END = false;
 const COALESCE_LABELS_IN_BLOCKER_LIST = false;
 const COALESCE_INFO_MARKERS = false;
 const SHOW_INTERMEDIATE_LABELS_FOR_OBJECTIVES = false;
+const PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS = 40;
 
 let SHOW_ONLY_MILESTONES = false;
 let OMIT_NESTED_BLOCKS = false;
@@ -482,7 +483,7 @@ class Backtrack {
     this.message(`Loading...`);
 
     if (this.files[0].name.match(/\.btpath$/)) {
-      this.recordedBaselineProfileFromBlob(this.files[0]);
+      this.pathProfileFromBlob(this.files[0]);
       return;
     }
 
@@ -593,8 +594,6 @@ class Backtrack {
       // Whipe the name so it doesn't cause any confusions.
       startup.names = [];
     }
-
-    console.log(this.info);
 
     this.cacheForwardtrail();
     this.listObjectives();
@@ -834,11 +833,11 @@ class Backtrack {
     this.objectivesSelector.val(`0:0:0:0`);
   }
 
-  clearColoring(set = () => undefined) {
+  clearColoring(set) {
     this.colorCookie = 1;
     for (let thread of Object.values(this.threads)) {
       for (let marker of Object.values(thread.markers)) {
-        marker.hit = set();
+        marker.hit = set ? new Set() : undefined;
       }
     }
   }
@@ -870,7 +869,9 @@ class Backtrack {
         }
 
         let overlimit = records.length >= options.limit;
-        let alreadyhit = marker.hit.has(options.colorCookie) && !ignroreHit.has(marker.type);
+        let alreadyhit = marker.hit &&
+          marker.hit.has(options.colorCookie) &&
+          !ignroreHit.has(marker.type);
 
         return !overlimit && !alreadyhit;
       },
@@ -893,7 +894,12 @@ class Backtrack {
   }
 
   baselineProfile(tid, id, btid, bid, indent = 0) {
-    this.clearColoring(() => new Set());
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    performance.mark("baseline-prepare-coloring");
+
+    this.clearColoring(true);
 
     let objective = this.get({ tid, id });
     breadcrumbs.push(objective, () => {
@@ -901,36 +907,53 @@ class Backtrack {
     });
     display.reset();
 
+    performance.mark("baseline-collect");
+
     let records = this.collectBacktrackRecords(tid, id, btid, bid);
+
+    performance.mark("baseline-profile-display");
+
     this.baselineProfileInternal(records, btid, bid, indent);
 
+    // negligible perf-impact block follows
+
     let filename = objective.names.join("_");
-    let subThreads = {};
+    let threads = {};
     for (let threadid in this.threads) {
       let thread = this.threads[threadid];
-      subThreads[threadid] = {
+      threads[threadid] = {
         process: thread.process,
         tid: thread.tid,
         name: thread.name,
       };
     }
 
+    performance.mark("baseline-color-dependencies");
+
     let colorCookie = this.colorCookie;
     ++this.colorCookie;
+    let depCount = PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS;
     for (let record of records) {
       if (record.dependent) {
+        if (!depCount) {
+          break;
+        }
+        --depCount;
+
         // This will color the markers only
         let marker = this.prev(record.marker);
         let { tid, id } = marker;
         this.collectBacktrackRecords(tid, id, btid, bid, {
-          limit: 20000,
+          limit: 1000,
           colorCookie
         });
       }
     }
 
+    performance.mark("baseline-copy-colored");
+
     for (let threadid in this.threads) {
-      let subThread = subThreads[threadid];
+      let subThread = threads[threadid];
       subThread.markers = {};
       let fullThread = this.threads[threadid];
       for (let marker of Object.values(fullThread.markers)) {
@@ -940,40 +963,49 @@ class Backtrack {
       }
     }
 
-    this.clearColoring();
+    performance.mark("baseline-clear-coloring");
+
+    this.clearColoring(false);
+
+    performance.mark("baseline-expose-download-blob");
 
     exposeDownload(
-      { records, threads: subThreads, objective, btid, bid },
-      `${filename}@${objective.time.toFixed(PREC)}.btpath`,
-      // * We must remove the "prev" property on records, as those are
-      // hugely enlarging the saved json and can be easily reconstructed.
-      (key, val) => {
-        if (key === "prev" || key == "hit") {
-          return undefined;
-        }
-        return val;
-      }
+      { threads, objective, btid, bid },
+      `${filename}@${objective.time.toFixed(PREC)}.btpath`
     );
+
+    performance.mark("baseline-finished");
+
+    let entries = performance.getEntriesByType("mark");
+    let prev;
+    for (let entry of entries) {
+      if (prev) {
+        let name = `measure-${prev}`;
+        performance.measure(name, prev, entry.name);
+        console.log(performance.getEntriesByName(name)[0]);
+      }
+      prev = entry.name;
+    }
   }
 
-  recordedBaselineProfileFromURI(URI) {
+  pathProfileFromURI(URI) {
     fetch(URI, { mode: 'cors', credentials: 'omit', }).then(function (response) {
       return response.blob();
     }).then(function (blob) {
-      this.recordedBaselineProfileFromBlob(blob);
+      this.pathProfileFromBlob(blob);
     }.bind(this)).catch((reason) => {
       this.message(reason);
     });
   }
 
-  recordedBaselineProfileFromBlob(blob) {
+  pathProfileFromBlob(blob) {
     breadcrumbs.reset();
 
     let reader = new FileReader();
     reader.onloadend = (event) => {
       if (event.target.readyState == FileReader.DONE && event.target.result) {
         let pathJSON = event.target.result;
-        this.recordedBaselineProfileFromJSONString(pathJSON);
+        this.pathProfileFromJSONString(pathJSON);
       }
     };
     reader.onerror = () => {
@@ -984,35 +1016,14 @@ class Backtrack {
     reader.readAsBinaryString(blob);
   }
 
-  recordedBaselineProfileFromJSONString(json) {
+  pathProfileFromJSONString(json) {
     let path = JSON.parse(json);
-    let { objective, threads, records, btid, bid } = path;
-    // The "prev" reference is omitted to save space in the saved path.
-    // Reconstruct it here.
-    let reconstruct = (records) => {
-      let prev = {};
-      for (let record of records) {
-        prev.prev = record;
-        prev = record;
-        if (record.dependent && record.dependent !== true) {
-          reconstruct(record.dependent);
-        }
-      }
-    }
-    reconstruct(records);
+    let { objective, threads, btid, bid } = path;
 
     this.threads = threads;
-    this.recordedBaselineProfile(objective, records, btid, bid);
-    display.flush();
-  }
-
-  recordedBaselineProfile(objective, records, btid, bid) {
-    breadcrumbs.push(records[0].marker, () => {
-      this.recordedBaselineProfile(objective, records, btid, bid);
-    });
 
     display.reset();
-    this.baselineProfileInternal(records, btid, bid, 0, true);
+    this.baselineProfile(objective.tid, objective.id, btid, bid);
     display.flush();
     this.message(objective.names.join("|"));
   }
@@ -1527,9 +1538,8 @@ $(() => {
 
   breadcrumbs = new Breadcrumb($("#breadcrumbs"), baseline);
 
-  console.log(location);
   let URL = location.search.substring(1);
   if (URL) {
-    baseline.recordedBaselineProfileFromURI(URL);
+    baseline.pathProfileFromURI(URL);
   }
 });
