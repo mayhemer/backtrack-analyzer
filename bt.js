@@ -833,18 +833,13 @@ class Backtrack {
     this.objectivesSelector.val(`0:0:0:0`);
   }
 
-  clearColoring(set) {
-    this.colorCookie = 1;
-    for (let thread of Object.values(this.threads)) {
-      for (let marker of Object.values(thread.markers)) {
-        marker.hit = set ? new Set() : undefined;
-      }
-    }
+  setPicker(callback) {
+    this.picker = callback;
   }
 
   collectBacktrackRecords(tid, id, btid, bid, options = {
     limit: 1000000,
-    colorCookie: 0
+    stoponhit: false,
   }) {
     let records = [];
     let milestone = {};
@@ -857,6 +852,13 @@ class Backtrack {
       MarkerType.RESPONSE_BEGIN,
       MarkerType.EXECUTE_BEGIN,
       MarkerType.INPUT_BEGIN,
+      /*
+      MarkerType.ROOT_END,
+      MarkerType.REDISPATCH_END,
+      MarkerType.RESPONSE_END,
+      MarkerType.EXECUTE_END,
+      MarkerType.INPUT_END,
+      */
     ]);
 
     this.backtrack(
@@ -869,11 +871,9 @@ class Backtrack {
         }
 
         let overlimit = records.length >= options.limit;
-        let alreadyhit = marker.hit &&
-          marker.hit.has(options.colorCookie) &&
-          !ignroreHit.has(marker.type);
+        let baselineHit = options.stoponhit && marker.hit_base && !ignroreHit.has(marker.type);
 
-        return !overlimit && !alreadyhit;
+        return !overlimit && !baselineHit;
       },
       (bt, trail, marker) => {
         let last = records.last();
@@ -893,86 +893,114 @@ class Backtrack {
     return records;
   }
 
-  baselineProfile(tid, id, btid, bid, indent = 0) {
+  baselineProfile(tid, id, btid, bid, savePath = true) {
     performance.clearMarks();
     performance.clearMeasures();
 
     performance.mark("baseline-prepare-coloring");
 
-    this.clearColoring(true);
+    let threads = {};
+    for (let threadid in this.threads) {
+      let { process, tid, name }  = this.threads[threadid];
+      threads[threadid] = {
+        process,
+        tid,
+        name,
+        markers: {},
+      };
+    }
+
+    const COLORING_BASE = 1;
+    const COLORING_DEP = 2;
+    let coloring = COLORING_BASE;
+
+    if (savePath) {
+      this.setPicker((threadid, index, marker) => {
+        threads[threadid].markers[index] = marker;
+        if (coloring == COLORING_BASE) {
+          marker.hit_base = true;
+        }
+      });
+    }
+
+    performance.mark("baseline-collect");
 
     let objective = this.get({ tid, id });
     breadcrumbs.push(objective, () => {
-      this.baselineProfile(tid, id, btid, bid, indent);
+      this.baselineProfile(tid, id, btid, bid, savePath);
     });
     display.reset();
-
-    performance.mark("baseline-collect");
 
     let records = this.collectBacktrackRecords(tid, id, btid, bid);
 
     performance.mark("baseline-profile-display");
 
-    this.baselineProfileInternal(records, btid, bid, indent);
-
-    // negligible perf-impact block follows
-
-    let filename = objective.names.join("_");
-    let threads = {};
-    for (let threadid in this.threads) {
-      let thread = this.threads[threadid];
-      threads[threadid] = {
-        process: thread.process,
-        tid: thread.tid,
-        name: thread.name,
-      };
-    }
+    this.baselineProfileInternal(records, btid, bid);
 
     performance.mark("baseline-color-dependencies");
 
-    let colorCookie = this.colorCookie;
-    ++this.colorCookie;
-    let depCount = PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS;
-    for (let record of records) {
-      if (record.dependent) {
-        if (!depCount) {
-          break;
-        }
-        --depCount;
+    if (savePath) {
+      coloring = COLORING_DEP;
+      let depCount = PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS;
+      for (let record of records) {
+        if (record.dependent) {
+          if (!depCount) {
+            break;
+          }
+          --depCount;
 
-        // This will color the markers only
-        let marker = this.prev(record.marker);
-        let { tid, id } = marker;
-        this.collectBacktrackRecords(tid, id, btid, bid, {
-          limit: 1000,
-          colorCookie
-        });
-      }
-    }
-
-    performance.mark("baseline-copy-colored");
-
-    for (let threadid in this.threads) {
-      let subThread = threads[threadid];
-      subThread.markers = {};
-      let fullThread = this.threads[threadid];
-      for (let marker of Object.values(fullThread.markers)) {
-        if (marker.hit.size) {
-          subThread.markers[marker.id - 1] = marker;
+          // This will color the markers only
+          let marker = this.prev(record.marker);
+          let { tid, id } = marker;
+          this.collectBacktrackRecords(tid, id, btid, bid, {
+            limit: 1000,
+            stoponhit: true,
+          });
         }
       }
     }
 
     performance.mark("baseline-clear-coloring");
 
-    this.clearColoring(false);
+    if (savePath) {
+      this.setPicker();
+      for (let thread of Object.values(threads)) {
+        for (let marker of Object.values(thread.markers)) {
+          marker.hit_base = undefined;
+        }
+      }
+    }
 
     performance.mark("baseline-expose-download-blob");
 
-    exposeDownload(
-      { threads, objective, btid, bid },
-      `${filename}@${objective.time.toFixed(PREC)}.btpath`
-    );
+    for (let tid of Object.keys(threads)) {
+      if (!Object.values(threads[tid].markers).length) {
+        delete threads[tid];
+      }
+    }
+
+    if (savePath) {
+      let filename = objective.names.join("_");
+      exposeDownload(
+        {
+          threads,
+          objective,
+          btid,
+          bid
+        },
+        `${filename}@${objective.time.toFixed(PREC)}.btpath`,
+        function (key, val) {
+          // "label" reconstructs during collectBacktrackRecords -> backtrack
+          // "tid" and "id" can be easily reconstructed from tables' keys
+          // but only for the markers
+          if (((this.type && this.type != MarkerType.OBJECTIVE && this.time) || (this.markers)) &&
+              (key == "label" || key === "id" || key === "tid")) {
+            return undefined;
+          }
+          return val;
+        }
+      );
+    }
 
     performance.mark("baseline-finished");
 
@@ -1022,13 +1050,25 @@ class Backtrack {
 
     this.threads = threads;
 
+    // tid and id properties are deliberately removed from saved path
+    // as we can easily reconstruct them
+    for (let threadid in this.threads) {
+      let thread = this.threads[threadid];
+      thread.tid = threadid;
+      for (let index in thread.markers) {
+        let marker = thread.markers[index];
+        marker.tid = thread.tid;
+        marker.id = parseInt(index) + 1;
+      }
+    }
+
     display.reset();
-    this.baselineProfile(objective.tid, objective.id, btid, bid);
+    this.baselineProfile(objective.tid, objective.id, btid, bid, false);
     display.flush();
     this.message(objective.names.join("|"));
   }
 
-  baselineProfileInternal(records, btid, bid, indent = 0, pathOnly = false) {
+  baselineProfileInternal(records, btid, bid, pathOnly = false) {
     let firstInfo = null;
 
     for (let record of records) {
@@ -1083,9 +1123,6 @@ class Backtrack {
       if (prev) {
         display.deferTimingBar(marker.time - prev.time);
       }
-      if (defered.level === undefined) {
-        defered.level = indent;
-      }
 
       let sources = this.sourcesDescriptor(marker, "→\n");
       if (sources) {
@@ -1096,7 +1133,7 @@ class Backtrack {
         defered.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
           try {
-            this.baselineProfile(marker.tid, marker.id, btid, bid, indent /* + 10*/);
+            this.baselineProfile(marker.tid, marker.id, btid, bid, !pathOnly);
           } catch (ex) { }
           display.flush();
         });
@@ -1106,18 +1143,10 @@ class Backtrack {
         // This is the nested block
         defered.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
-          this.baselineProfile(marker.tid, marker.id, btid, bid, indent /* + 10*/);
+          this.baselineProfile(marker.tid, marker.id, btid, bid, !pathOnly);
           display.flush();
         });
       }
-
-      if (defered.level < indent) {
-        // We have hit the original path
-        defered.element.addClass("join");
-        break;
-      }
-
-      defered.element.addClass(className).css({ "margin-left": indent + "%" })
 
       if (blockers.length) {
         let sub = display.sub($("<div>").addClass("blocker-container"), record.marker);
@@ -1163,7 +1192,7 @@ class Backtrack {
                 } else {
                   forward = this.prev(forward);
                 }
-                this.baselineProfile(forward.tid, forward.id, btid, bid, indent /* + 10*/);
+                this.baselineProfile(forward.tid, forward.id, btid, bid, !pathOnly);
                 display.flush();
               });
             }
@@ -1369,8 +1398,8 @@ class Backtrack {
     // Can't enforce the following assertion until we gracefully close BT files on all processes
     /* this.assert(index < this.threads[gid.tid].markers.length); */
     let result = this.threads[gid.tid].markers[index] || new PlaceholderMarker();
-    if (result.hit) {
-      result.hit.add(this.colorCookie);
+    if (this.picker) {
+      this.picker(gid.tid, index, result);
     }
     return result;
   }
