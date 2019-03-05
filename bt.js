@@ -1034,8 +1034,9 @@ class Backtrack {
     }).then(function (blob) {
       if (contentType.match("zip")) {
         this.pathProfileFromZIP(blob);
+      } else {
+        this.pathProfileFromBlob(blob);
       }
-      this.pathProfileFromBlob(blob);
     }.bind(this)).catch((reason) => {
       this.message(reason);
     });
@@ -1052,6 +1053,7 @@ class Backtrack {
               continue;
             }
 
+            let progress = 10;
             entry.getData(new zip.TextWriter(),
               (text) => {
                 try {
@@ -1060,6 +1062,17 @@ class Backtrack {
                   this.message(ex.message || ex);
                 }
                 reader.close();
+              },
+              (prog, total) => {
+                let percent = (prog * 100) / total;
+                if (percent > progress) {
+                  this.message(`Unzipping... ${percent.toFixed(0)}%`);
+                  progress += 10;
+                  return;
+                }
+                if (prog == total) {
+                  this.message('Loading...');
+                }
               });
 
             return;
