@@ -487,6 +487,12 @@ class Backtrack {
       return;
     }
 
+    if (this.files[0].name.match(/\.zip$/)) {
+      // make this genral use!
+      this.pathProfileFromZIP(this.files[0]);
+      return;
+    }
+
     let files = [];
     for (let file of this.files) {
       files.push(this.readFile(file));
@@ -1017,13 +1023,55 @@ class Backtrack {
   }
 
   pathProfileFromURI(URI) {
+    this.message(`Fetching...`);
+
+    let contentType = '';
     fetch(URI, { mode: 'cors', credentials: 'omit', }).then(function (response) {
+      if (response.headers.has('content-type')) {
+        contentType = response.headers.get('content-type');
+      }
       return response.blob();
     }).then(function (blob) {
+      if (contentType.match("zip")) {
+        this.pathProfileFromZIP(blob);
+      }
       this.pathProfileFromBlob(blob);
     }.bind(this)).catch((reason) => {
       this.message(reason);
     });
+  }
+
+  pathProfileFromZIP(blob) {
+    this.message(`Unzipping...`);
+    zip.createReader(new zip.BlobReader(blob),
+      (reader) => {
+        reader.getEntries((entries) => {
+          for (let entry of entries) {
+            if (!entry.filename.match(/\.btpath$/)) {
+              console.log(`skipping zipped file ${entry.filename}`);
+              continue;
+            }
+
+            entry.getData(new zip.TextWriter(),
+              (text) => {
+                try {
+                  this.pathProfileFromJSONString(text);
+                } catch (ex) {
+                  this.message(ex.message || ex);
+                }
+                reader.close();
+              });
+
+            return;
+          }
+
+          this.message("no '.btpath' file found in the zip file");
+        });
+      },
+      (error) => {
+        this.message(error);
+      }
+    );
   }
 
   pathProfileFromBlob(blob) {
@@ -1540,6 +1588,10 @@ class Backtrack {
 }
 
 $(() => {
+  zip.workerScripts = {
+    inflater: ['zip/z-worker.js', 'zip/inflate.js']
+  };
+
   $("#objectives1").append($("<option>")
     .attr("value", `0:0:0:0`)
     .text(`Please load files for the baseline profile`)
