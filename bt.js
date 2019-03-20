@@ -49,7 +49,7 @@ const BLOCKER_IN_DIFF_TH = 80;
 const SHOW_BLOCKERS_IN_SINGLE = false;
 const BLOCKER_LISTING_THRESHOLD_MS = 0;
 const DEPENDECY_CLICKABLE_IN_SINGLE = true;
-const SHOW_BLOCKER_PATH_FROM_EXECUTE_END = false;
+const SHOW_BLOCKER_PATH_FROM_EXECUTE_END = true;
 const COALESCE_LABELS_IN_BLOCKER_LIST = false;
 const COALESCE_INFO_MARKERS = false;
 const SHOW_INTERMEDIATE_LABELS_FOR_OBJECTIVES = false;
@@ -1253,7 +1253,7 @@ class Backtrack {
                 } else {
                   forward = this.prev(forward);
                 }
-                this.baselineProfile(forward.tid, forward.id, btid, bid, !pathOnly);
+                this.baselineProfile(forward.tid, forward.id, btid, bid, true);
                 display.flush();
               });
             }
