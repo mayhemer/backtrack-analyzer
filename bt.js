@@ -54,18 +54,23 @@ const COALESCE_LABELS_IN_BLOCKER_LIST = false;
 const COALESCE_INFO_MARKERS = false;
 const SHOW_INTERMEDIATE_LABELS_FOR_OBJECTIVES = false;
 const PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS = 40;
+const LAZY_PATH_LOAD_BATCH = 500;
 
 let SHOW_ONLY_MILESTONES = false;
 let OMIT_NESTED_BLOCKS = false;
+
+const voidOnLoadMore = (_) => { };
+var onLoadMore = voidOnLoadMore;
 
 const FILE_SLICE = 256 << 10;
 const PREC = 2;
 
 function exposeDownload(data, fileName, filter) {
-  let json = JSON.stringify(data, filter);
+  let json = JSON.stringify(data, filter, " ");
   let blob = new Blob([json], { type: "octet/stream" });
   let url = window.URL.createObjectURL(blob);
 
+  $("#download-path").show();
   let a = document.getElementById("download-path");
   if (a.href) {
     window.URL.revokeObjectURL(a.href);
@@ -87,6 +92,24 @@ function ensure(array, itemName, def = {}) {
   }
 
   return array[itemName];
+}
+
+function consumeGenerator(generator, filter = i => i) {
+  let item = generator.next();
+  let results = [];
+  while (!item.done) {
+    let filtered = filter(item.value);
+    if (filtered) {
+      results.push(filtered);
+    }
+
+    item = generator.next();
+
+    if (filtered === false) {
+      break;
+    }
+  }
+  return results;
 }
 
 Array.prototype.last = function () {
@@ -162,7 +185,7 @@ class Breadcrumb {
 
   rebuild() {
     this.target.empty();
-    for (let { marker, revert, scroll } of this.history) {
+    for (let { marker, revert, scroll, footRecord } of this.history) {
       this.target.append(" &gt; ");
       this.target.append($("<span>").text(
         `${MarkerType.$(marker.type)} "${marker.names.join("|").split(" ")[0]}"`
@@ -171,7 +194,7 @@ class Breadcrumb {
         this.history = this.history.filter((bc) => {
           return !(drop || (drop = bc.marker === marker));
         });
-        revert();
+        revert(footRecord);
         display.flush();
         $(window).scrollTop(scroll);
       }));
@@ -181,29 +204,34 @@ class Breadcrumb {
   push(marker, revert) {
     if (this.history.length) {
       this.history.last().scroll = $(window).scrollTop();
+      this.history.last().footRecord = this.bt.footRecord;
     }
     this.history.push({
       marker,
       revert,
-      scroll: 0
+      scroll: 0,
+      footRecord: null,
     });
     this.rebuild();
   }
 }
 
 class Display {
-  constructor(timeline) {
+  constructor(timeline, master = true) {
     this.timeline = timeline;
-    this.reset();
+    this.reset(master);
   }
 
-  reset() {
+  reset(master = true) {
     this.defered = [];
+    this.known = [];
     this.markers = {};
     this.timeline.empty();
     this.nextNonInfo = 1;
-    location.hash = "";
-    $(window).scrollTop(0);
+
+    if (master) {
+      $(window).scrollTop(0);
+    }
   }
 
   gid(marker) {
@@ -212,12 +240,13 @@ class Display {
 
   sub(target, marker) {
     this.defer({ element: target, marker });
-    return new Display(target);
+    return new Display(target, false);
   }
 
   defer(element) {
-    element.order = this.defered.length;
+    element.order = this.known.length;
     this.defered.push(element);
+    this.known.push(element);
     return element;
   }
 
@@ -303,6 +332,7 @@ class Display {
 
   flush(sort = () => { }) {
     let elements = Object.values(this.defered);
+    this.defered = [];
     sort(elements);
 
     for (let element of elements) {
@@ -368,8 +398,10 @@ class Backtrack {
     this.baseline = baseline;
 
     let objectiveHandler = () => {
+      window.onLoadMore = voidOnLoadMore;
       display.reset();
       breadcrumbs.reset();
+      location.hash = "";
       try {
         let [tid, id, break_tid, break_id] = this.objectivesSelector.val().split(":").map(id => parseInt(id));
         if (this.baseline) {
@@ -822,12 +854,14 @@ class Backtrack {
 
     this.objectivesSelector.append($("<option>").attr("value", `0:0:0:0`).text("Select objective"));
     for (let obj of this.objectives) {
-      obj.labels = [];
-      obj.source = this.backtrack(obj.tid, obj.id, 0, 0, () => true, () => { }, (bt, label) => obj.labels.push(label));
-      let sources = SHOW_INTERMEDIATE_LABELS_FOR_OBJECTIVES
-        ? obj.labels.concat([obj.source])
-        : [obj.source];
-      for (let source of sources) {
+      obj.labels = consumeGenerator(this.backtrack(obj.tid, obj.id, 0, 0), item => {
+        if (SHOW_INTERMEDIATE_LABELS_FOR_OBJECTIVES) {
+          return item.label || item.source;
+        }
+        return item.source;
+      });
+      obj.source = obj.labels.last();
+      for (let source of obj.labels) {
         let time = obj.time - source.time;
         this.objectivesSelector
           .append($("<option>")
@@ -847,9 +881,6 @@ class Backtrack {
     limit: 1000000,
     stoponhit: false,
   }) {
-    let records = [];
-    let milestone = {};
-
     // *_BEGIN may be hit as nested, so there can be a different way of walking
     // them.  Rather ignore hit to not break the different path follow.
     let ignroreHit = new Set([
@@ -858,53 +889,28 @@ class Backtrack {
       MarkerType.RESPONSE_BEGIN,
       MarkerType.EXECUTE_BEGIN,
       MarkerType.INPUT_BEGIN,
-      /*
-      MarkerType.ROOT_END,
-      MarkerType.REDISPATCH_END,
-      MarkerType.RESPONSE_END,
-      MarkerType.EXECUTE_END,
-      MarkerType.INPUT_END,
-      */
     ]);
 
-    this.backtrack(
-      tid, id, btid, bid,
-      (bt, marker, className = "") => {
-        records.push({ marker, className });
-        if (bt.isMilestone(marker)) {
-          milestone.prev = records.last();
-          milestone = records.last();
-        }
+    let count = 0;
+    let generator = this.backtrack(tid, id, btid, bid);
+    return consumeGenerator(generator, (record) => {
+      let { marker } = record;
 
-        let overlimit = records.length >= options.limit;
-        let baselineHit = options.stoponhit && marker.hit_base && !ignroreHit.has(marker.type);
-
-        return !overlimit && !baselineHit;
-      },
-      (bt, trail, marker) => {
-        let last = records.last();
-        bt.assert(last.marker === marker);
-
-        last.trail = trail;
-        last.dependent = marker.rooted;
-        last.blockers = [];
-        bt.blockers(trail, marker, (bt, blocker) => {
-          last.blockers.push(blocker);
-          let forward = bt.forwardtrail(blocker);
-          blocker.duration = forward.time - blocker.time;
+      if (record.trail) {
+        this.blockers(record.trail, marker, (bt, blocker) => {
+          bt.forwardtrail(blocker);
         });
       }
-    );
 
-    return records;
+      let overlimit = ++count >= options.limit;
+      let baselineHit = options.stoponhit && marker.hit_base && !ignroreHit.has(marker.type);
+
+      return !overlimit && !baselineHit ? undefined : false;
+    });
   }
 
-  baselineProfile(tid, id, btid, bid, savePath = true) {
-    performance.clearMarks();
-    performance.clearMeasures();
-
-    performance.mark("baseline-prepare-coloring");
-
+  baselineProfile(tid, id, btid, bid, savePath = true, footRecord = null) {
+    let records = [];
     let threads = {};
     for (let threadid in this.threads) {
       let { process, tid, name }  = this.threads[threadid];
@@ -927,99 +933,75 @@ class Backtrack {
           marker.hit_base = true;
         }
       });
-    }
 
-    performance.mark("baseline-collect");
+      $("#prepare-path").show().click(() => {
+        $("#prepare-path").hide();
+        coloring = COLORING_DEP;
+        let depCount = PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS;
+        for (let record of records) {
+          if (record.dependent) {
+            if (!depCount) {
+              break;
+            }
+            --depCount;
+
+            // This will color the markers only
+            let marker = this.prev(record.marker);
+            let { tid, id } = marker;
+            this.collectBacktrackRecords(tid, id, btid, bid, {
+              limit: 1000,
+              stoponhit: true,
+            });
+          }
+        }
+
+        this.setPicker();
+
+        for (let tid of Object.keys(threads)) {
+          if (!Object.values(threads[tid].markers).length) {
+            delete threads[tid];
+          }
+        }
+        for (let thread of Object.values(threads)) {
+          for (let marker of Object.values(thread.markers)) {
+            marker.hit_base = undefined;
+          }
+        }
+
+        let objective = this.get({ tid, id });
+        let filename = objective.names.join("_");
+        exposeDownload(
+          {
+            threads,
+            objective,
+            btid,
+            bid
+          },
+          `${filename}@${objective.time.toFixed(PREC)}.btpath`,
+          function (key, val) {
+            // "label" reconstructs via backtrack()
+            // "tid" and "id" can be easily reconstructed from tables' keys
+            // but only for the markers
+            if (((this.type && this.type != MarkerType.OBJECTIVE && this.time) || (this.markers)) &&
+              (key == "label" || key === "id" || key === "tid")) {
+              return undefined;
+            }
+            return val;
+          }
+        );
+      });
+    } else {
+      $("#prepare-path").hide();
+    }
 
     let objective = this.get({ tid, id });
-    breadcrumbs.push(objective, () => {
-      this.baselineProfile(tid, id, btid, bid, savePath);
+    breadcrumbs.push(objective, (footRecord) => {
+      this.baselineProfile(tid, id, btid, bid, savePath, footRecord);
     });
+
     display.reset();
-
-    let records = this.collectBacktrackRecords(tid, id, btid, bid);
-
-    performance.mark("baseline-profile-display");
-
-    this.baselineProfileInternal(records, btid, bid);
-
-    performance.mark("baseline-color-dependencies");
-
-    if (savePath) {
-      coloring = COLORING_DEP;
-      let depCount = PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS;
-      for (let record of records) {
-        if (record.dependent) {
-          if (!depCount) {
-            break;
-          }
-          --depCount;
-
-          // This will color the markers only
-          let marker = this.prev(record.marker);
-          let { tid, id } = marker;
-          this.collectBacktrackRecords(tid, id, btid, bid, {
-            limit: 1000,
-            stoponhit: true,
-          });
-        }
-      }
-    }
-
-    performance.mark("baseline-clear-coloring");
-
-    if (savePath) {
-      this.setPicker();
-      for (let thread of Object.values(threads)) {
-        for (let marker of Object.values(thread.markers)) {
-          marker.hit_base = undefined;
-        }
-      }
-    }
-
-    performance.mark("baseline-expose-download-blob");
-
-    for (let tid of Object.keys(threads)) {
-      if (!Object.values(threads[tid].markers).length) {
-        delete threads[tid];
-      }
-    }
-
-    if (savePath) {
-      let filename = objective.names.join("_");
-      exposeDownload(
-        {
-          threads,
-          objective,
-          btid,
-          bid
-        },
-        `${filename}@${objective.time.toFixed(PREC)}.btpath`,
-        function (key, val) {
-          // "label" reconstructs during collectBacktrackRecords -> backtrack
-          // "tid" and "id" can be easily reconstructed from tables' keys
-          // but only for the markers
-          if (((this.type && this.type != MarkerType.OBJECTIVE && this.time) || (this.markers)) &&
-              (key == "label" || key === "id" || key === "tid")) {
-            return undefined;
-          }
-          return val;
-        }
-      );
-    }
-
-    performance.mark("baseline-finished");
-
-    let entries = performance.getEntriesByType("mark");
-    let prev;
-    for (let entry of entries) {
-      if (prev) {
-        let name = `measure-${prev}`;
-        performance.measure(name, prev, entry.name);
-        console.log(performance.getEntriesByName(name)[0]);
-      }
-      prev = entry.name;
-    }
+    let generator = this.backtrack(tid, id, btid, bid);
+    this.baselineProfileInternal(generator, btid, bid, !savePath, records, footRecord);
   }
 
   pathProfileFromURI(URI) {
@@ -1129,21 +1111,51 @@ class Backtrack {
     this.message(objective.names.join("|"));
   }
 
-  baselineProfileInternal(records, btid, bid, pathOnly = false) {
+  baselineProfileInternal(generator, btid, bid, pathOnly = false, records, footRecord) {
+    $("#download-path").hide();
+
     let firstInfo = null;
+    let current = generator.next();
+    if (current.done) {
+      return;
+    }
 
-    for (let record of records) {
-      let { marker, className } = record;
+    current = current.value;
+    let loadRecord = () => {
+      if (!current) {
+        return true;
+      }
 
-      if (!this.isMilestone(marker)) {
-        continue;
+      let preceeding = null;
+      do {
+        const next = generator.next();
+        if (next.done) {
+          break;
+        }
+
+        preceeding = next.value;
+      } while (!this.isMilestone(preceeding.marker));
+
+      let record = current;
+      record.prev = preceeding;
+
+      records.push(record);
+      let { marker } = record;
+
+      if (record.trail) {
+        record.dependent = marker.rooted;
+        record.blockers = [];
+        this.blockers(record.trail, marker, (bt, blocker) => {
+          record.blockers.push(blocker);
+          let forward = bt.forwardtrail(blocker);
+          blocker.duration = forward.time - blocker.time;
+        });
       }
 
       let isInfo = marker.type == MarkerType.INFO;
-
       if (COALESCE_INFO_MARKERS) {
         if (isInfo && marker.names.join("|") === (firstInfo && firstInfo.names.join("|"))) {
-          continue;
+          return;
         }
 
         if (firstInfo) {
@@ -1155,21 +1167,18 @@ class Backtrack {
         firstInfo = isInfo ? marker : null;
       }
 
-      let prev = record.prev && record.prev.marker;
+      let prevMarker = record.prev && record.prev.marker;
 
       let blockers = [];
       let message;
-      if (prev) {
-        message = `delay: ${(marker.time - prev.time).toFixed(PREC)}ms`;
+      if (prevMarker) {
+        message = `delay: ${(marker.time - prevMarker.time).toFixed(PREC)}ms`;
         if (record.blockers && record.blockers.length) {
           message += `, blocker count: ${record.blockers.length}`;
           blockers = record.blockers.filter(blocker => {
             if (pathOnly || !BLOCKER_LISTING_THRESHOLD_MS) {
               return true;
             }
-            //let edge = Math.min(this.forwardtrail(blocker).time, marker.time);
-            //let time = edge - blocker.time;
-
             let time = Math.min(marker.time - blocker.timer, blocker.duration);
             return time > BLOCKER_LISTING_THRESHOLD_MS;
           });
@@ -1181,14 +1190,17 @@ class Backtrack {
       }
 
       let defered = display.deferMarker(this, marker, message);
-      if (prev) {
-        display.deferTimingBar(marker.time - prev.time);
+      if (prevMarker) {
+        display.deferTimingBar(marker.time - prevMarker.time);
       }
 
-      let sources = this.sourcesDescriptor(marker, "→\n");
-      if (sources) {
-        defered.element.prop("title", `source:\n ${sources}`);
-      }
+      defered.element.hover(() => {
+        let sources = this.sourcesDescriptor(marker, "→\n");
+        if (sources) {
+          defered.element.prop("title", `source:\n ${sources}`);
+        }
+        defered.element.off("hover");
+      });
 
       if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent) {
         defered.element.addClass("clickable").on("click", () => {
@@ -1216,10 +1228,7 @@ class Backtrack {
             // Can't use this.sources() here since we need to backtrack from this point first to cache labels
             let labels = [];
             if (!pathOnly) {
-              let source = this.backtrack(blocker.tid, blocker.id, btid, bid, () => true, () => { }, (bt, label) => {
-                labels.push(label);
-              });
-              labels.push(source);
+              labels = consumeGenerator(this.backtrack(blocker.tid, blocker.id, btid, bid), item => (item.label || item.source));
             }
 
             let lastSource;
@@ -1264,32 +1273,54 @@ class Backtrack {
         }) });
         sub.flush();
       }
+
+      this.footRecord = current;
+
+      current = preceeding;
+      if (!current) {
+        window.onLoadMore = voidOnLoadMore;
+      }
     }
+
+    window.onLoadMore = (atBottom) => {
+      if (atBottom) {
+        for (let load = 0; load < LAZY_PATH_LOAD_BATCH; ++load) {
+          loadRecord();
+        }
+        display.flush();
+      }
+    }
+
+    if (footRecord) {
+      while (this.footRecord.marker !== footRecord.marker && !loadRecord()) {
+      }
+    } else for (let load = 0; load < LAZY_PATH_LOAD_BATCH; ++load) {
+      loadRecord();
+    }
+    display.flush();
   }
 
   compareProfiles(tid, id, break_tid, break_id) {
-    let collector = function (bt, marker, className) {
-      if (!bt.isMilestone(marker)) {
-        return true;
-      }
-      this.push({ marker, className });
-      return true;
-    };
-    let trailCollector = function (bt, trail, marker) {
-      if (!bt.isMilestone(marker)) {
-        return;
-      }
-      bt.assert(this.last().marker === marker, "trailsCollector bad marker");
-      this.last().trail = trail;
-      this.last().dependent = marker.rooted;
-    };
+    // WARNING:
+    // This code has been migrated to bactrack() as a generator, but has not been tested since then,
+    // as it's not currently used as a critical feature.
+    
+    let [btid, bid, break_btid, break_bid] =
+      this.baseline.objectivesSelector.val().split(":").map(id => parseInt(id));
 
-    let [btid, bid, break_btid, break_bid] = this.baseline.objectivesSelector.val().split(":").map(id => parseInt(id));
-    let baselinePath = [];
-    this.baseline.backtrack(btid, bid, break_btid, break_bid, collector.bind(baselinePath), trailCollector.bind(baselinePath));
-
-    let modifiedPath = [];
-    this.backtrack(tid, id, break_tid, break_id, collector.bind(modifiedPath), trailCollector.bind(modifiedPath));
+    const filter = function(record) {
+      if (!this.isMilestone(record.marker)) {
+        return undefined;
+      }
+      record.dependent = record.trail && record.marker.rooted;
+      return record;
+    }
+    let baselinePath = consumeGenerator(
+      this.baseline.backtrack(btid, bid, break_btid, break_bid), filter.bind(this.baseline)
+    );
+    let modifiedPath = consumeGenerator(
+      this.backtrack(tid, id, break_tid, break_id), filter.bind(this)
+    );
 
     // must be done after calling backtrack(), because only now all labels are correctly set on markers
     for (let marker of baselinePath) {
@@ -1356,9 +1387,16 @@ class Backtrack {
         if (base.trail) {
           this.assert(!!mod.trail, "Equal marker from the modified profile doesn't have a trail");
 
+          const collector = function (bt, marker, className) {
+            if (!bt.isMilestone(marker)) {
+              return true;
+            }
+            this.push({ marker, className });
+            return true;
+          };
+
           let baselineBlockers = [];
           this.baseline.blockers(base.trail, base.marker, collector.bind(baselineBlockers));
-
           let modifiedBlockers = [];
           this.blockers(mod.trail, mod.marker, collector.bind(modifiedBlockers));
 
@@ -1528,30 +1566,38 @@ class Backtrack {
     }
   }
 
-  backtrack(tid, id, break_tid, break_id, collector, blocker_trail = () => { }, labels = () => { }) {
+  *backtrack(tid, id, break_tid, break_id) {
     let marker = this.get({ tid, id });
-    let stop = this.get({ tid: break_tid, id: break_id });
+    const stop = this.get({ tid: break_tid, id: break_id });
 
     let lazyLabel = { marker: null };
-    let keepgoing = true;
-    let collect = (marker, className) => {
-      marker.label = lazyLabel;
-      keepgoing &= collector(this, marker, className);
+    const result = (marker, props = {}) => {
+      if (props.label || props.source) {
+        lazyLabel.marker = marker;
+        lazyLabel = { marker: null };
+      } else {
+        marker.label = lazyLabel;
+      }
+
+      return Object.assign({
+        marker,
+        className: '',
+      }, props);
     }
 
-    while (marker && keepgoing) {
+    while (marker) {
       switch (marker.type) {
         case MarkerType.ROOT_BEGIN:
           if (marker.rooted) {
             // Uninteresting
-            // collect(marker, "span");
+            // yield result(marker, { className: "span" });
             marker = this.prev(marker);
             break;
           } // else fall through
         case MarkerType.INPUT_BEGIN:
         case MarkerType.STARTUP:
-          collect(marker);
-          return marker;
+          yield result(marker, { source: marker });
+          return;
         case MarkerType.DISPATCH:
         case MarkerType.REQUEST:
           marker = this.prev(marker);
@@ -1559,15 +1605,13 @@ class Backtrack {
         case MarkerType.REDISPATCH_BEGIN:
         case MarkerType.EXECUTE_BEGIN:
         case MarkerType.RESPONSE_BEGIN:
-          collect(marker);
           let trail = this.backtrail(marker);
-          blocker_trail(this, trail, marker);
-          collect(trail);
+          yield result(marker, { trail });
+          yield result(trail);
           marker = this.prev(trail);
           break;
         case MarkerType.ROOT_END:
         case MarkerType.LOOP_END:
-        case MarkerType.LABEL_END:
           // Uninteresting, just skip
           marker = this.backtrail(marker);
           marker = this.prev(marker);
@@ -1575,24 +1619,22 @@ class Backtrack {
         case MarkerType.REDISPATCH_END:
         case MarkerType.EXECUTE_END:
         case MarkerType.RESPONSE_END:
+        case MarkerType.LABEL_END:
         case MarkerType.INPUT_END:
-          if (!OMIT_NESTED_BLOCKS) collect(marker, "span");
+          if (!OMIT_NESTED_BLOCKS) yield result(marker, { className: "span" });
           marker = this.backtrail(marker);
-          if (!OMIT_NESTED_BLOCKS) collect(marker, "span");
+          if (!OMIT_NESTED_BLOCKS) yield result(marker, { className: "span" });
           marker = this.prev(marker);
           break;
         case MarkerType.LABEL_BEGIN:
-          lazyLabel.marker = marker;
-          lazyLabel = {};
-          collect(marker);
-          labels(this, marker);
+          yield result(marker, { label: marker });
           if (marker === stop) {
-            return marker;
+            return;
           }
           marker = this.prev(marker);
           break;
         default:
-          collect(marker);
+          yield result(marker);
           marker = this.prev(marker);
           break;
       }
@@ -1623,7 +1665,23 @@ $(() => {
     operation && operation();
   }).trigger("change");
 
-  let timeline = $("#timeline").css({ "height": "50%", });
+  $("#download-path").hide();
+
+  ((selector) => {
+    const options = {
+      root: null,
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      window.onLoadMore(entry.isIntersecting);
+    }, options);
+
+    let target = document.querySelector(selector);
+    observer.observe(target);
+  })("#footer");
+
+  let timeline = $("#timeline");
   display = new Display(timeline);
 
   let baseline = new Backtrack($("#files1"), $("#objectives1"));

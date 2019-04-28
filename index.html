@@ -27,11 +27,15 @@
       display: inline-block;
     }
     #timeline {
-      float: left;
       width: 100%;
       display: block;
       box-sizing: border-box;
       padding: 1em 0;
+    }
+    #footer {
+      width: 100%;
+      clear: both;
+      height: 10px;
     }
     #info {
       float: right;
@@ -151,18 +155,23 @@
     .marker-type-info.clickable {
       cursor: copy;
     }
+    .marker-type-label_begin,
+    .marker-type-objective,
+    .marker-type-milestone {
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
   <p style="color:red;font-weight: bold">
     Load ALL *.backtrack files from a backtrack-logs-* directory together :)<br/>
-    Works only with Backtrack patch wip13+
   </p>
   <p>
     <input type="checkbox" id="only-milestones">Only milestones</input>
     |
     <input type="checkbox" id="omit-nested" checked>Omit nested blocks</input>
     |
+    <button id="prepare-path">Get path download link</button>
     <a id="download-path">Download path</a>
   </p>
   <h2 class="half box">Baseline</h2>
@@ -175,4 +184,5 @@
   <select class="half" id="objectives2" data-bt="1"></select>
   <div id="breadcrumbs" class="full-width"></div>
   <div id="timeline"></div>
+  <div id="footer"></div>
 </body>
