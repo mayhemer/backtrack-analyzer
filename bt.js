@@ -915,101 +915,6 @@ class Backtrack {
     });
   }
 
-  baselineProfile(tid, id, btid, bid, savePath = true, footRecord = null) {
-    let records = [];
-    let threads = {};
-    for (let threadid in this.threads) {
-      let { process, tid, name }  = this.threads[threadid];
-      threads[threadid] = {
-        process,
-        tid,
-        name,
-        markers: {},
-      };
-    }
-
-    const COLORING_BASE = 1;
-    const COLORING_DEP = 2;
-    let coloring = COLORING_BASE;
-
-    if (savePath) {
-      this.setPicker((threadid, index, marker) => {
-        threads[threadid].markers[index] = marker;
-        if (coloring == COLORING_BASE) {
-          marker.hit_base = true;
-        }
-      });
-
-      $("#prepare-path").show().click(() => {
-        $("#prepare-path").hide();
-        coloring = COLORING_DEP;
-        let depCount = PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS;
-        for (let record of records) {
-          if (record.dependent) {
-            if (!depCount) {
-              break;
-            }
-            --depCount;
-
-            // This will color the markers only
-            let marker = this.prev(record.marker);
-            let { tid, id } = marker;
-            this.collectBacktrackRecords(tid, id, btid, bid, {
-              limit: 1000,
-              stoponhit: true,
-            });
-          }
-        }
-
-        this.setPicker();
-
-        for (let tid of Object.keys(threads)) {
-          if (!Object.values(threads[tid].markers).length) {
-            delete threads[tid];
-          }
-        }
-        for (let thread of Object.values(threads)) {
-          for (let marker of Object.values(thread.markers)) {
-            marker.hit_base = undefined;
-          }
-        }
-
-        let objective = this.get({ tid, id });
-        let filename = objective.names.join("_");
-        exposeDownload(
-          {
-            threads,
-            objective,
-            btid,
-            bid
-          },
-          `${filename}@${objective.time.toFixed(PREC)}.btpath`,
-          function (key, val) {
-            // "label" reconstructs via backtrack()
-            // "tid" and "id" can be easily reconstructed from tables' keys
-            // but only for the markers
-            if (((this.type && this.type != MarkerType.OBJECTIVE && this.time) || (this.markers)) &&
-              (key == "label" || key === "id" || key === "tid")) {
-              return undefined;
-            }
-            return val;
-          }
-        );
-      });
-    } else {
-      $("#prepare-path").hide();
-    }
-
-    let objective = this.get({ tid, id });
-    breadcrumbs.push(objective, (footRecord) => {
-      this.baselineProfile(tid, id, btid, bid, savePath, footRecord);
-    });
-
-    display.reset();
-    let generator = this.backtrack(tid, id, btid, bid);
-    this.baselineProfileInternal(generator, btid, bid, !savePath, records, footRecord);
-  }
-
   pathProfileFromURI(URI) {
     this.message(`Fetching...`);
 
@@ -1117,9 +1022,101 @@ class Backtrack {
     this.message(objective.names.join("|"));
   }
 
-  baselineProfileInternal(generator, btid, bid, pathOnly = false, records, footRecord) {
-    $("#download-path").hide();
+  baselineProfile(tid, id, btid, bid, fullProfile = true, footRecord = null) {
+    let records = [];
+    let threads = {};
+    for (let threadid in this.threads) {
+      let { process, tid, name } = this.threads[threadid];
+      threads[threadid] = {
+        process,
+        tid,
+        name,
+        markers: {},
+      };
+    }
 
+    const COLORING_BASE = 1;
+    const COLORING_DEP = 2;
+    let coloring = COLORING_BASE;
+
+    if (fullProfile) {
+      this.setPicker((threadid, index, marker) => {
+        threads[threadid].markers[index] = marker;
+        if (coloring == COLORING_BASE) {
+          marker.hit_base = true;
+        }
+      });
+
+      $("#prepare-path").show().click(() => {
+        $("#prepare-path").hide();
+        coloring = COLORING_DEP;
+        let depCount = PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS;
+        for (let record of records) {
+          if (record.dependent) {
+            if (!depCount) {
+              break;
+            }
+            --depCount;
+
+            // This will color the markers only
+            let marker = this.prev(record.marker);
+            let { tid, id } = marker;
+            this.collectBacktrackRecords(tid, id, btid, bid, {
+              limit: 1000,
+              stoponhit: true,
+            });
+          }
+        }
+
+        this.setPicker();
+
+        for (let tid of Object.keys(threads)) {
+          if (!Object.values(threads[tid].markers).length) {
+            delete threads[tid];
+          }
+        }
+        for (let thread of Object.values(threads)) {
+          for (let marker of Object.values(thread.markers)) {
+            marker.hit_base = undefined;
+          }
+        }
+
+        let objective = this.get({ tid, id });
+        let filename = objective.names.join("_");
+        exposeDownload(
+          {
+            threads,
+            objective,
+            btid,
+            bid
+          },
+          `${filename}@${objective.time.toFixed(PREC)}.btpath`,
+          function (key, val) {
+            // "label" reconstructs via backtrack()
+            // "tid" and "id" can be easily reconstructed from tables' keys
+            // but only for the markers
+            if (((this.type && this.type != MarkerType.OBJECTIVE && this.time) || (this.markers)) &&
+              (key == "label" || key === "id" || key === "tid")) {
+              return undefined;
+            }
+            return val;
+          }
+        );
+      });
+    } else {
+      $("#prepare-path").hide();
+    }
+
+    let objective = this.get({ tid, id });
+    breadcrumbs.push(objective, (footRecord) => {
+      this.baselineProfile(tid, id, btid, bid, fullProfile, footRecord);
+    });
+
+    display.reset();
+    $("#download-path").hide();
+    this.footRecord = { marker: null };
+
+    let generator = this.backtrack(tid, id, btid, bid);
     let firstInfo = null;
     let current = generator.next();
     if (current.done) {
@@ -1182,7 +1179,7 @@ class Backtrack {
         if (record.blockers && record.blockers.length) {
           message += `, blocker count: ${record.blockers.length}`;
           blockers = record.blockers.filter(blocker => {
-            if (pathOnly || !BLOCKER_LISTING_THRESHOLD_MS) {
+            if (!fullProfile || !BLOCKER_LISTING_THRESHOLD_MS) {
               return true;
             }
             let time = Math.min(marker.time - blocker.timer, blocker.duration);
@@ -1212,7 +1209,7 @@ class Backtrack {
         defered.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
           try {
-            this.baselineProfile(marker.tid, marker.id, btid, bid, !pathOnly);
+            this.baselineProfile(marker.tid, marker.id, btid, bid, fullProfile);
           } catch (ex) { }
           display.flush();
         });
@@ -1222,7 +1219,7 @@ class Backtrack {
         // This is the nested block
         defered.element.addClass("clickable").on("click", () => {
           let marker = this.prev(record.marker);
-          this.baselineProfile(marker.tid, marker.id, btid, bid, !pathOnly);
+          this.baselineProfile(marker.tid, marker.id, btid, bid, fullProfile);
           display.flush();
         });
       }
@@ -1233,7 +1230,7 @@ class Backtrack {
           for (let blocker of blockers) {
             // Can't use this.sources() here since we need to backtrack from this point first to cache labels
             let labels = [];
-            if (!pathOnly) {
+            if (fullProfile) {
               labels = consumeGenerator(this.backtrack(blocker.tid, blocker.id, btid, bid), item => (item.label || item.source));
             }
 
@@ -1260,7 +1257,7 @@ class Backtrack {
               `self-time: ${blocker.duration.toFixed(PREC)}ms\nsource events: ${sources}`
             );
             element.addClass("blocker alone");
-            if (!pathOnly) {
+            if (fullProfile) {
               element.addClass("clickable").click(() => {
                 let forward = this.forwardtrail(blocker);
                 if (!SHOW_BLOCKER_PATH_FROM_EXECUTE_END || !forward.id) {
@@ -1286,24 +1283,29 @@ class Backtrack {
       if (!current) {
         window.onLoadMore = voidOnLoadMore;
       }
+    } // loadRecord()
+
+    let loadBatch = () => {
+      for (let load = 0; load < LAZY_PATH_LOAD_BATCH; ++load) {
+        loadRecord();
+      }
+      display.flush();
     }
 
     window.onLoadMore = (atBottom) => {
       if (atBottom) {
-        for (let load = 0; load < LAZY_PATH_LOAD_BATCH; ++load) {
-          loadRecord();
-        }
-        display.flush();
+        loadBatch();
       }
     }
 
     if (footRecord) {
       while (this.footRecord.marker !== footRecord.marker && !loadRecord()) {
       }
-    } else for (let load = 0; load < LAZY_PATH_LOAD_BATCH; ++load) {
-      loadRecord();
-    }
-    display.flush();
+      display.flush();
+      return;
+    } 
+
+    loadBatch();
   }
 
   compareProfiles(tid, id, break_tid, break_id) {
