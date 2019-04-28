@@ -188,7 +188,13 @@ class Breadcrumb {
     for (let { marker, revert, scroll, footRecord } of this.history) {
       this.target.append(" &gt; ");
       this.target.append($("<span>").text(
-        `${MarkerType.$(marker.type)} "${marker.names.join("|").split(" ")[0]}"`
+        `${MarkerType.$(marker.type)} "${marker.names.reduce((result, name) => {
+          if (result.length > 25) {
+            return result;
+          }
+          if (result) result += " ";
+          return result += name;
+        }, "")}"`
       ).click(() => {
         let drop = false;
         this.history = this.history.filter((bc) => {
