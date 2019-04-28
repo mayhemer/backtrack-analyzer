@@ -1193,6 +1193,7 @@ class Backtrack {
       }
 
       let defered = display.deferMarker(this, marker, message);
+      defered.element.addClass(record.className);
       if (prevMarker) {
         display.deferTimingBar(marker.time - prevMarker.time);
       }
