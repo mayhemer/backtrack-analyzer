@@ -740,7 +740,7 @@ class Backtrack {
         thread.time = match[1];
       }
     } else if (id === "NP") {
-      process.name = `${match[0]}(${process.pid})`;
+      process.name = `${match[0]}(${process.pid})`.replace('_', ':');
       process.type = match[0];
     } else { // Mark<>
       id = parseInt(id);
@@ -860,13 +860,17 @@ class Backtrack {
 
     this.objectivesSelector.append($("<option>").attr("value", `0:0:0:0`).text("Select objective"));
     for (let obj of this.objectives) {
-      obj.labels = consumeGenerator(this.backtrack(obj.tid, obj.id, 0, 0), item => {
-        if (SHOW_INTERMEDIATE_LABELS_FOR_OBJECTIVES) {
-          return item.label || item.source;
-        }
-        return item.source;
-      });
-      obj.source = obj.labels.last();
+      try {
+        obj.labels = consumeGenerator(this.backtrack(obj.tid, obj.id, 0, 0), item => {
+          if (SHOW_INTERMEDIATE_LABELS_FOR_OBJECTIVES) {
+            return item.label || item.source;
+          }
+          return item.source;
+        });
+      } catch (ex) {
+        obj.labels = [];
+      }
+      obj.source = obj.labels.length && obj.labels.last();
       for (let source of obj.labels) {
         let time = obj.time - source.time;
         this.objectivesSelector
