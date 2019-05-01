@@ -512,7 +512,7 @@ class Backtrack {
       }
       this.message(`Fetching...`);
       return response.blob();
-    }).then(function (blob) {
+    }.bind(this)).then(function (blob) {
       if (contentType.match("zip")) {
         this.consumeZIP(blob);
       } else {
