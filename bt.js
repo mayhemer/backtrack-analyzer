@@ -1110,6 +1110,8 @@ class Backtrack {
     $("#download-path").hide();
     this.footRecord = { marker: null };
 
+    let hitNonInfo = false;
+
     let generator = this.backtrack(tid, id, btid, bid);
     let firstInfo = null;
     let current = generator.next();
@@ -1150,6 +1152,11 @@ class Backtrack {
       }
 
       let isInfo = marker.type == MarkerType.INFO;
+
+      if (!isInfo) {
+        hitNonInfo = true;
+      }
+
       if (COALESCE_INFO_MARKERS) {
         if (isInfo && marker.names.join("|") === (firstInfo && firstInfo.names.join("|"))) {
           return;
@@ -1282,8 +1289,9 @@ class Backtrack {
       }
     } // loadRecord()
 
-    let loadBatch = () => {
-      for (let load = 0; load < LAZY_PATH_LOAD_BATCH; ++load) {
+    let loadBatch = (untilNonInfo = false) => {
+      hitNonInfo = false;
+      for (let load = 0; load < LAZY_PATH_LOAD_BATCH || (untilNonInfo && !hitNonInfo); ++load) {
         loadRecord();
       }
       display.flush();
@@ -1291,7 +1299,7 @@ class Backtrack {
 
     window.onLoadMore = (atBottom) => {
       if (atBottom) {
-        loadBatch();
+        loadBatch(true);
       }
     }
 
