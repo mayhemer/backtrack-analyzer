@@ -586,7 +586,9 @@ class Backtrack {
 
     let files = [];
     for (let file of this.files) {
-      files.push(this.readFile(file));
+      if (file.name.match(/\.backtrack$/)) {
+        files.push(this.readFile(file));
+      }
     }
 
     Promise.all(files).then((files) => {
