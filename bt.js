@@ -735,7 +735,7 @@ class Backtrack {
     let thread = ensure(this.threads, tid, () => new_thread(tid));
 
     if (id === "NT") {
-      thread.name = match[0];
+      thread.name = `${match[0]}(${tid & 0xffff})`;
       if (!thread.time) {
         thread.time = match[1];
       }
