@@ -500,10 +500,63 @@ class Backtrack {
     ).val("0:0:0:0");
   }
 
+  consumeURL(URI) {
+    this.message(`Fetching...`);
+
+    let contentType = '';
+    fetch(URI, { mode: 'cors', credentials: 'omit', }).then(function (response) {
+      if (response.headers.has('content-type')) {
+        contentType = response.headers.get('content-type');
+      }
+      return response.blob();
+    }).then(function (blob) {
+      if (contentType.match("zip")) {
+        this.consumeZIP(blob);
+      } else {
+        this.pathProfileFromBlob(blob);
+      }
+    }.bind(this)).catch((reason) => {
+      this.message(reason);
+    });
+  }
+
+  consumeZIP(blob) {
+    this.message(`Unzipping...`);
+    zip.createReader(new zip.BlobReader(blob),
+      (reader) => {
+        reader.getEntries((entries) => {
+          let data = [];
+          let count = 0;
+          for (let entry of entries) {
+            data.push(new Promise((resolve) => {
+              entry.getData(
+                new zip.BlobWriter(),
+                (blob) => {
+                  blob.name = entry.filename;
+                  this.message(`Unizpped ${++count} of ${entries.length}`);
+                  resolve(blob);
+                },
+                (prog) => { }
+              );
+            }));
+          }
+          Promise.all(data).then((data) => {
+            this.files = data;
+            this.consumeFiles();
+          });
+        });
+      },
+      (error) => {
+        console.error(error);
+      }
+    );
+  }
+
   consumeFiles() {
     performance.mark("consume-all-begin");
 
     operation = null;
+    window.onLoadMore = voidOnLoadMore;
     display.reset();
     if (breadcrumbs) {
       breadcrumbs.reset();
@@ -526,8 +579,7 @@ class Backtrack {
     }
 
     if (this.files[0].name.match(/\.zip$/)) {
-      // make this genral use!
-      this.pathProfileFromZIP(this.files[0]);
+      this.consumeZIP(this.files[0]);
       return;
     }
 
@@ -887,103 +939,6 @@ class Backtrack {
     this.picker = callback;
   }
 
-  collectBacktrackRecords(tid, id, btid, bid, options = {
-    limit: 1000000,
-    stoponhit: false,
-  }) {
-    // *_BEGIN may be hit as nested, so there can be a different way of walking
-    // them.  Rather ignore hit to not break the different path follow.
-    let ignroreHit = new Set([
-      MarkerType.ROOT_BEGIN,
-      MarkerType.REDISPATCH_BEGIN,
-      MarkerType.RESPONSE_BEGIN,
-      MarkerType.EXECUTE_BEGIN,
-      MarkerType.INPUT_BEGIN,
-    ]);
-
-    let count = 0;
-    let generator = this.backtrack(tid, id, btid, bid);
-    return consumeGenerator(generator, (record) => {
-      let { marker } = record;
-
-      if (record.trail) {
-        this.blockers(record.trail, marker, (bt, blocker) => {
-          bt.forwardtrail(blocker);
-        });
-      }
-
-      let overlimit = ++count >= options.limit;
-      let baselineHit = options.stoponhit && marker.hit_base && !ignroreHit.has(marker.type);
-
-      return !overlimit && !baselineHit ? undefined : false;
-    });
-  }
-
-  pathProfileFromURI(URI) {
-    this.message(`Fetching...`);
-
-    let contentType = '';
-    fetch(URI, { mode: 'cors', credentials: 'omit', }).then(function (response) {
-      if (response.headers.has('content-type')) {
-        contentType = response.headers.get('content-type');
-      }
-      return response.blob();
-    }).then(function (blob) {
-      if (contentType.match("zip")) {
-        this.pathProfileFromZIP(blob);
-      } else {
-        this.pathProfileFromBlob(blob);
-      }
-    }.bind(this)).catch((reason) => {
-      this.message(reason);
-    });
-  }
-
-  pathProfileFromZIP(blob) {
-    this.message(`Unzipping...`);
-    zip.createReader(new zip.BlobReader(blob),
-      (reader) => {
-        reader.getEntries((entries) => {
-          for (let entry of entries) {
-            if (!entry.filename.match(/\.btpath$/)) {
-              console.log(`skipping zipped file ${entry.filename}`);
-              continue;
-            }
-
-            let progress = 10;
-            entry.getData(new zip.TextWriter(),
-              (text) => {
-                try {
-                  this.pathProfileFromJSONString(text);
-                } catch (ex) {
-                  this.message(ex.message || ex);
-                }
-                reader.close();
-              },
-              (prog, total) => {
-                let percent = (prog * 100) / total;
-                if (percent > progress) {
-                  this.message(`Unzipping... ${percent.toFixed(0)}%`);
-                  progress += 10;
-                  return;
-                }
-                if (prog == total) {
-                  this.message('Loading...');
-                }
-              });
-
-            return;
-          }
-
-          this.message("no '.btpath' file found in the zip file");
-        });
-      },
-      (error) => {
-        this.message(error);
-      }
-    );
-  }
-
   pathProfileFromBlob(blob) {
     breadcrumbs.reset();
 
@@ -1024,6 +979,38 @@ class Backtrack {
     this.baselineProfile(objective.tid, objective.id, btid, bid, false);
     display.flush();
     this.message(objective.names.join("|"));
+  }
+
+  collectBacktrackRecords(tid, id, btid, bid, options = {
+    limit: 1000000,
+    stoponhit: false,
+  }) {
+    // *_BEGIN may be hit as nested, so there can be a different way of walking
+    // them.  Rather ignore hit to not break the different path follow.
+    let ignroreHit = new Set([
+      MarkerType.ROOT_BEGIN,
+      MarkerType.REDISPATCH_BEGIN,
+      MarkerType.RESPONSE_BEGIN,
+      MarkerType.EXECUTE_BEGIN,
+      MarkerType.INPUT_BEGIN,
+    ]);
+
+    let count = 0;
+    let generator = this.backtrack(tid, id, btid, bid);
+    return consumeGenerator(generator, (record) => {
+      let { marker } = record;
+
+      if (record.trail) {
+        this.blockers(record.trail, marker, (bt, blocker) => {
+          bt.forwardtrail(blocker);
+        });
+      }
+
+      let overlimit = ++count >= options.limit;
+      let baselineHit = options.stoponhit && marker.hit_base && !ignroreHit.has(marker.type);
+
+      return !overlimit && !baselineHit ? undefined : false;
+    });
   }
 
   baselineProfile(tid, id, btid, bid, fullProfile = true, footRecord = null) {
@@ -1705,6 +1692,6 @@ $(() => {
 
   let URL = location.search.substring(1);
   if (URL) {
-    baseline.pathProfileFromURI(URL);
+    baseline.consumeURL(URL);
   }
 });
