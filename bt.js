@@ -562,6 +562,7 @@ class Backtrack {
       breadcrumbs.reset();
     }
 
+    this.setPicker();
     this.objectives = [];
     this.processes = {};
     this.threads = {};
