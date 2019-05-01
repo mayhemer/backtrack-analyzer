@@ -500,10 +500,11 @@ class Backtrack {
   }
 
   consumeURL(URI) {
-    this.message(`Fetching...`);
+    this.message(`Requesting...`);
 
     let contentType = '';
     fetch(URI, { mode: 'cors', credentials: 'omit', }).then(function (response) {
+      this.message(`Fetching...`);
       if (response.headers.has('content-type')) {
         contentType = response.headers.get('content-type');
       }
