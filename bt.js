@@ -518,9 +518,9 @@ class Backtrack {
       } else {
         this.pathProfileFromBlob(blob);
       }
-    }.bind(this)).catch((reason) => {
+    }.bind(this)).catch(function(reason) {
       this.message(reason);
-    });
+    }.bind(this));
   }
 
   consumeZIP(blob) {
