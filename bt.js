@@ -533,7 +533,7 @@ class Backtrack {
                 new zip.BlobWriter(),
                 (blob) => {
                   blob.name = entry.filename;
-                  this.message(`Unizpped ${++count} of ${entries.length}`);
+                  this.message(`Unzipped ${++count} of ${entries.length}`);
                   resolve(blob);
                 },
                 (prog) => { }
