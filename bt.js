@@ -1189,6 +1189,7 @@ class Backtrack {
         display.deferTimingBar(marker.time - prevMarker.time);
       }
 
+      /*
       defered.element.hover(() => {
         let sources = this.sourcesDescriptor(marker, "→\n");
         if (sources) {
@@ -1196,6 +1197,7 @@ class Backtrack {
         }
         defered.element.off("hover");
       });
+      */
 
       if (DEPENDECY_CLICKABLE_IN_SINGLE && record.dependent) {
         defered.element.addClass("clickable").on("click", () => {
