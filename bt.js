@@ -186,9 +186,8 @@ class Breadcrumb {
   rebuild() {
     this.target.empty();
     for (let { marker, revert, scroll, footRecord } of this.history) {
-      this.target.append(" &gt; ");
       this.target.append($("<span>").text(
-        `${MarkerType.$(marker.type)} "${marker.names.reduce((result, name) => {
+        `> ${MarkerType.$(marker.type)} "${marker.names.reduce((result, name) => {
           if (result.length > 25) {
             return result;
           }
