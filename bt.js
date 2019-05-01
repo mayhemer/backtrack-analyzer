@@ -505,7 +505,7 @@ class Backtrack {
     let contentType = '';
     fetch(URI, { mode: 'cors', credentials: 'omit', }).then(function (response) {
       if (!response.ok) {
-        throw `Failed to fetch ${URI}`;
+        throw `Failed to fetch ${response.url}`;
       }
       if (response.headers.has('content-type')) {
         contentType = response.headers.get('content-type');
