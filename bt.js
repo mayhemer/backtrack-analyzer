@@ -504,10 +504,13 @@ class Backtrack {
 
     let contentType = '';
     fetch(URI, { mode: 'cors', credentials: 'omit', }).then(function (response) {
-      this.message(`Fetching...`);
+      if (!response.ok) {
+        throw `Failed to fetch ${URI}`;
+      }
       if (response.headers.has('content-type')) {
         contentType = response.headers.get('content-type');
       }
+      this.message(`Fetching...`);
       return response.blob();
     }).then(function (blob) {
       if (contentType.match("zip")) {
