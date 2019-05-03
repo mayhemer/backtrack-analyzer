@@ -378,14 +378,7 @@ class Backtrack {
         try {
           // "TERM1\ TERM2 TERM3" will be processed as:
           // match("TERM1 TERM2") && match("TERM3")
-          let terms = params.term.split(" ").reduce((result, term) => {
-            if (result.last() && result.last().slice(-1) === '\\') {
-              result[result.length - 1] += " " + term;
-            } else {
-              result.push(term);
-            }
-            return result;
-          }, []);
+          let terms = params.term.split(/[^\\] +/);
           for (let term of terms) {
             if (!data.text.match(term)) {
               return null;
