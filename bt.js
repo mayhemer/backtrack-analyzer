@@ -659,7 +659,7 @@ class Backtrack {
 
   async consume(files) {
     for (let file of Array.from(files)) {
-      let pid = file.file.name.split(".")[0];
+      let pid = (m => (m && m[0]))(file.file.name.match(/[0-9]\.backtrack$/)) || '?';
       let process = {
         pid,
         name: pid,
