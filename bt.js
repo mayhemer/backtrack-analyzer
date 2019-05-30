@@ -23,6 +23,8 @@ let MarkerType = {
   STARTUP: 21,
   INFO: 22,
   MILESTONE: 23,
+  SIGNAL: 24,
+  ACCEPT: 25,
 
   $: function (type) {
     for (let t in this) {
@@ -652,7 +654,7 @@ class Backtrack {
 
   async consume(files) {
     for (let file of Array.from(files)) {
-      let pid = (m => (m && m[0]))(file.file.name.match(/[0-9]+\.backtrack$/)) || '?';
+      let pid = (m => m && m[1])(file.file.name.match(/([0-9]+)\.backtrack$/)) || '?';
       let process = {
         pid,
         name: pid,
@@ -865,6 +867,8 @@ class Backtrack {
         case MarkerType.SLEEP:
         case MarkerType.WAKE:
         case MarkerType.MILESTONE:
+        case MarkerType.SIGNAL:
+        case MarkerType.ACCEPT:
           thread.addmarker(id, {
             tid,
             type,
@@ -1634,6 +1638,10 @@ class Backtrack {
           marker = this.backtrail(marker);
           if (!OMIT_NESTED_BLOCKS) yield result(marker, { className: "span" });
           marker = this.prev(marker);
+          break;
+        case MarkerType.ACCEPT:
+          yield result(marker);
+          marker = this.backtrail(marker);
           break;
         case MarkerType.LABEL_BEGIN:
           yield result(marker, { label: marker });
