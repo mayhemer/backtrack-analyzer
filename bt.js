@@ -284,7 +284,7 @@ class Display {
       let thread = bt.threads[marker.tid];
       let process = thread.process;
       let text = `${MarkerType.$(marker.type)} "${names.join("|")}" @${marker.time.toFixed(PREC)}ms`;
-      if (marker.type !== MarkerType.INFO) {
+      if (marker.type !== MarkerType.INFO && (SHOW_ONLY_MILESTONES || marker.type !== MarkerType.MILESTONE)) {
         text +=
           (mod ? `|${mod.time.toFixed(PREC)}ms` : "") +
           (short ? "" : `\n  ${process.name}/${thread.name}  `) +
