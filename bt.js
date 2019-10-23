@@ -57,6 +57,7 @@ const COALESCE_INFO_MARKERS = false;
 const SHOW_INTERMEDIATE_LABELS_FOR_OBJECTIVES = false;
 const PATH_DOWNLOAD_LIMIT_DEPENDENT_EXECS = 40;
 const LAZY_PATH_LOAD_BATCH = 500;
+const ADD_MILESTONES_AMONG_OBJECTIVES = false; // can slow down loading a lot
 
 let SHOW_ONLY_MILESTONES = false;
 let OMIT_NESTED_BLOCKS = false;
@@ -825,14 +826,6 @@ class Backtrack {
               break;
           }
           break;
-        case MarkerType.OBJECTIVE:
-          thread.addmarker(id, {
-            tid,
-            type,
-            time: this.parseTime(match[1]),
-          });
-          this.objectives.push(thread.last);
-          break;
         case MarkerType.STARTUP:
           thread.addmarker(id, {
             tid,
@@ -848,6 +841,19 @@ class Backtrack {
             time: this.parseTime(match[1]),
           });
           break;
+        case MarkerType.OBJECTIVE:
+        case MarkerType.MILESTONE:
+          if (ADD_MILESTONES_AMONG_OBJECTIVES || type !== MarkerType.MILESTONE) {
+            thread.addmarker(id, {
+              tid,
+              type,
+              time: this.parseTime(match[1]),
+            });
+            this.objectives.push(thread.last);
+            break;
+          } else {
+            // fall through
+          }
         case MarkerType.DISPATCH:
         case MarkerType.REQUEST:
         case MarkerType.ROOT_BEGIN:
@@ -866,7 +872,6 @@ class Backtrack {
         case MarkerType.LABEL_END:
         case MarkerType.SLEEP:
         case MarkerType.WAKE:
-        case MarkerType.MILESTONE:
         case MarkerType.SIGNAL:
         case MarkerType.ACCEPT:
           thread.addmarker(id, {
